@@ -51,9 +51,7 @@ Example cubic path:
    q_path      = 0 0 0  0 1/2 0  1/2 1/2 0  0 0 0
 
 See :doc:`../sed_workflow/preparing_trajectory_basis` for basis-file
-preparation and :ref:`commensurate-q-points` for the path solver based on the
-greatest common divisor (GCD) and Bézout's identity, endpoint normalization,
-and treatment of non-orthogonal cells.
+preparation and :doc:`../theory` for commensurate-Q construction.
 
 :doc:`Back to SED parameters <sed>`
 
