@@ -182,36 +182,234 @@ Finite sampling, constraints, removed center-of-mass motion, and Γ-point
 translational modes cause deviations. At Γ, the three translational modes may
 be absent, giving approximately :math:`(3n-3)k_BT/2`.
 
+.. _commensurate-q-points:
+
 Commensurate Q points
 ---------------------
 
-Write the supercell and primitive-cell matrices as
+Periodicity and coordinate conventions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Write the primitive-cell matrix as :math:`\mathbf C` and the supercell
+matrix as :math:`\mathbf S`, with lattice vectors as **rows**. Their
+relationship is
 
 .. math::
 
-   \mathbf S=\mathbf P\mathbf p.
+   \mathbf S=\mathbf P\mathbf C,
+   \qquad \mathbf P\in\mathbb Z^{3\times3},
+   \qquad \det\mathbf P\ne0.
 
-A reduced wave vector is commensurate when
-
-.. math::
-
-   \mathbf q_\mathrm{red}\mathbf P^T\in\mathbb Z^3.
-
-For a path
+The primitive reciprocal basis includes :math:`2\pi`:
 
 .. math::
 
-   \mathbf q(f)
-   =
-   \mathbf q_\mathrm{start}
-   +f\left(
-   \mathbf q_\mathrm{end}-\mathbf q_\mathrm{start}
-   \right),
+   \mathbf B=2\pi\mathbf C^{-\mathsf T},
+   \qquad \mathbf q_\mathrm{cart}=\mathbf q_\mathrm{red}\mathbf B.
+
+Reduced coordinates are relative to this **primitive reciprocal basis**,
+not to the supercell reciprocal basis. Compatibility with periodic boundary
+conditions requires an integer number of phase cycles across every supercell
+vector:
+
+.. math::
+
+   \frac{\mathbf q_\mathrm{cart}\mathbf S^{\mathsf T}}{2\pi}
+   =\mathbf q_\mathrm{red}\mathbf P^{\mathsf T}
+   =\mathbf n\in\mathbb Z^3.
+
+Thus :math:`\exp(i\mathbf q_\mathrm{cart}\cdot\mathbf S_j)=1` for each
+supercell vector :math:`\mathbf S_j`. The vector :math:`\mathbf n` contains
+integer reciprocal-supercell indices; it is not a multiple of the atom count
+or supercell size. No orthogonality assumption is used. The complete matrix
+:math:`\mathbf P`, including its off-diagonal entries, is retained.
+
+Endpoint normalization
+~~~~~~~~~~~~~~~~~~~~~~
+
+The :doc:`q_path <input_parameters/q_path>` input specifies path endpoints.
+MDtrace applies one normalization policy to both the solver and its output:
+
+* For each decimal coordinate :math:`x`, find the closest rational value
+  :math:`r` whose denominator is at most 12. Use :math:`r` when
+  :math:`|r-x|\le10^{-5}`; otherwise retain the decimal value as a fraction.
+  For example, ``0.33333`` becomes :math:`1/3`, whereas ``0.3333`` retains
+  its decimal value. This is an interpretation of the input, not an increase
+  in numerical resolution.
+* Exact ``fractions.Fraction`` values and fraction strings passed directly to
+  ``BZPathHelper`` are preserved. The input-file parser converts coordinates
+  to floating point first, so input-file fractions subsequently follow the
+  decimal normalization policy above. Small-denominator fractions such as
+  ``1/3`` and ``1/2`` are recommended for conventional high-symmetry points.
+* The normalized endpoints are used throughout the exact solve and the
+  construction of each output point. Conversion to floating point occurs
+  after interpolation, when forming Cartesian q-points and output parameters.
+
+Greatest common divisor and Bézout's identity
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The path solver uses the **greatest common divisor (GCD)** and
+**Bézout's identity**. The **extended Euclidean algorithm** computes the
+integer coefficients in that identity.
+
+Let :math:`\mathbf s` and :math:`\mathbf e` denote the normalized endpoints.
+The closed path is
+
+.. math::
+
+   \mathbf q_\mathrm{red}(f)=\mathbf s+f(\mathbf e-\mathbf s),
    \qquad 0\leq f\leq1,
 
-MDtrace retains the fractional values satisfying that integer condition.
-Larger supercells provide denser exact Q sampling. Arbitrary incommensurate
-points can introduce aliasing and should not be used for quantitative SED.
+and its representation in supercell reciprocal coordinates is
+
+.. math::
+
+   \mathbf a=\mathbf s\mathbf P^{\mathsf T},
+   \qquad \mathbf b=(\mathbf e-\mathbf s)\mathbf P^{\mathsf T},
+   \qquad \mathbf a+f\mathbf b\in\mathbb Z^3.
+
+The solver obtains all solutions jointly, without separately enumerating
+each coordinate's solutions and intersecting the resulting sets.
+
+**1. Clear the denominators.** Let :math:`D>0` be the least common multiple
+of the denominators of all components of :math:`\mathbf a` and
+:math:`\mathbf b`. Then
+
+.. math::
+
+   \mathbf A=D\mathbf a\in\mathbb Z^3,
+   \qquad \mathbf H=D\mathbf b\in\mathbb Z^3.
+
+**2. Reduce the integer direction.** For :math:`\mathbf H\ne\mathbf0`, set
+
+.. math::
+
+   g=\gcd(|H_1|,|H_2|,|H_3|)>0,
+   \qquad \mathbf v=\mathbf H/g.
+
+The components of :math:`\mathbf v` have greatest common divisor one.
+Bézout's identity guarantees an integer vector :math:`\mathbf w` satisfying
+the relations below. Repeated application of the extended Euclidean algorithm
+computes its coefficients:
+
+.. math::
+
+   \mathbf w\cdot\mathbf H=g,
+   \qquad \mathbf w\cdot\mathbf v=1.
+
+**3. Test whether the line intersects the integer lattice.** Define
+:math:`m=\mathbf w\cdot\mathbf A`. Any integer solution :math:`\mathbf n`
+must have :math:`k=\mathbf w\cdot\mathbf n\in\mathbb Z`, so
+
+.. math::
+
+   Dk=m+fg,
+   \qquad f=\frac{Dk-m}{g},
+   \qquad
+   \mathbf n=\frac{\mathbf A-m\mathbf v}{D}+k\mathbf v.
+
+Therefore the infinite line intersects the integer lattice if and only if
+
+.. math::
+
+   A_i-mv_i\equiv0\pmod D
+   \quad\text{for every }i=1,2,3.
+
+If this divisibility condition fails, the path has no commensurate points.
+If it holds, every integer :math:`k` in the following bounds gives a solution,
+and there are no other solutions.
+
+**4. Restrict the solutions to the segment.** The condition
+:math:`0\le f\le1` gives
+
+.. math::
+
+   k_\mathrm{min}=\left\lceil\frac{m}{D}\right\rceil,
+   \qquad
+   k_\mathrm{max}=\left\lfloor\frac{m+g}{D}\right\rfloor,
+   \qquad f_k=\frac{Dk-m}{g}.
+
+When :math:`k_\mathrm{min}>k_\mathrm{max}`, the line has lattice
+intersections but none lie on this segment. Otherwise, the number and
+spacing of the solutions are
+
+.. math::
+
+   N_q=k_\mathrm{max}-k_\mathrm{min}+1,
+   \qquad \Delta f=\frac{D}{g},
+   \qquad
+   \mathbf q_{k,\mathrm{cart}}
+   =[\mathbf s+f_k(\mathbf e-\mathbf s)]\mathbf B.
+
+The divisibility checks and bounds use Python integers, and the parameters
+are retained as exact fractions until output. Negative coordinates, reversed
+paths, and noncommensurate endpoints are supported. A path endpoint is
+included only when it satisfies the integer condition.
+
+For example, with :math:`\mathbf P=\operatorname{diag}(12,8,4)` and
+:math:`\mathbf s=(0,0,0)`, :math:`\mathbf e=(1/2,1/2,0)`, one has
+:math:`D=1`, :math:`\mathbf A=\mathbf0`, :math:`\mathbf H=(6,4,0)`,
+:math:`g=2`, and :math:`m=0`. The three solutions are
+
+.. math::
+
+   f=0,\tfrac12,1,
+   \qquad
+   \mathbf q_\mathrm{red}=(0,0,0),\ (1/4,1/4,0),\ (1/2,1/2,0).
+
+Boundary cases and numerical checks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If :math:`\mathbf H=\mathbf0`, the normalized path has zero length. It
+returns its single point at :math:`f=0` if all components of
+:math:`\mathbf A` are divisible by :math:`D`; otherwise it returns no points.
+Endpoint equality is tested exactly after normalization, rather than by a
+floating-point ``allclose`` comparison that could discard a short segment.
+
+``build_commensurate_path`` retains its two-array interface: Cartesian
+q-points of shape ``(N, 3)`` and path parameters of shape ``(N,)``, ordered
+from the supplied start toward the end. Empty results have shapes ``(0, 3)``
+and ``(0,)``. Points are not folded into another Brillouin zone, and this
+per-segment helper does not deduplicate endpoints shared by separate segments.
+
+Cell matrices must be finite, nonsingular, and of shape ``(3, 3)``.
+MDtrace computes :math:`\mathbf S\mathbf C^{-1}`, rounds it to an integer
+matrix :math:`\mathbf P`, and requires an absolute error at most
+:math:`10^{-4}` in each entry, with zero relative tolerance. A singular
+rounded matrix is rejected. After conversion to Cartesian coordinates, the
+returned points are also checked against
+:math:`\mathbf q_\mathrm{cart}\mathbf S^{\mathsf T}/(2\pi)`: each component
+must be within :math:`10^{-4}` of an integer. This final check catches
+inconsistent cell precision or numerical conversion errors. The integer
+solve is exact for the inferred :math:`\mathbf P` and normalized endpoints;
+the supplied cell matrices and returned Cartesian arrays use floating point.
+
+Consequences for SED sampling
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The solver preserves the supercell-periodic spatial Fourier basis used by
+SED. It supports both orthogonal and non-orthogonal cells; the reference
+crystal and the chosen periodic supercell must still describe the trajectory
+being analyzed. Passing a periodicity check does not make a nonperiodic
+cropped region into a periodic crystal.
+
+For a fixed supercell and path, a complete exact solver must return the same
+set of commensurate points. The method based on the greatest common divisor
+and Bézout's identity reduces intermediate
+enumeration; it does not create extra allowed q-points or improve the
+physical resolution of an existing trajectory. Denser sampling requires a
+suitable larger supercell or a supercell matrix chosen for the target path.
+Longer trajectories improve frequency resolution, not q-point spacing.
+Arbitrary incommensurate points mix the finite cell's discrete wave vectors
+and should not be treated as additional independent modes when fitting
+quantitative SED linewidths.
+
+The periodicity condition is also described in the
+`Phonopy formulation <https://phonopy.github.io/phonopy/formulation.html#commensurate-points>`_.
+The one-dimensional construction using the greatest common divisor and
+Bézout's identity is distinct from Phonopy's
+Smith-normal-form enumeration of a complete commensurate grid. For direct
+input examples, see :doc:`input_parameters/q_path`.
 
 Calculation logic
 -----------------
