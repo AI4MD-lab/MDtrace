@@ -5,7 +5,7 @@
 <h1 align="center">MDtrace</h1>
 
 <p align="center">
-  Molecular Dynamic Trajectory Trace
+  Molecular Dynamic Trajectory Trace — tracing phonon and vibrational physics in MD trajectories.
 </p>
 
 <p align="center">
