@@ -5,7 +5,7 @@
 <h1 align="center">MDtrace</h1>
 
 <p align="center">
-  Trace reciprocal-space physics inside molecular-dynamics trajectories.
+  Molecular Dynamic Trajectory Trace
 </p>
 
 <p align="center">
@@ -15,6 +15,22 @@
   <img src="https://img.shields.io/badge/version-1.1.0-3f7f6f" alt="MDtrace version 1.1.0">
   <img src="https://img.shields.io/badge/python-%E2%89%A53.10-3776ab" alt="Python 3.10 or newer">
 </p>
+
+### Why the name?
+
+```
+ Molecular        Dynamic        Trajectory    Trace
+    │                │               │            │
+    ▼                ▼               ▼            ▼
+   [MD]        +   [MD]        +  [tra]   +   [ce]
+    │                │               │            │
+    └────────────────┘               └────────────┘
+         MD                               trace
+
+                    ──▶  MDtrace  ◀──
+```
+
+The name is self-contained in the phrase: **M**olecular **D**ynamic **Tra**jectory **Trace**. The `MD` captures the simulation method, and `trace` is the action — tracing phonons, tracing spectra, tracing the physics hidden in every atom's path.
 
 MDtrace 1.1.0 is an SED-focused toolkit for extracting eigenvector-free,
 kinetic-energy-weighted phonon spectra from molecular-dynamics trajectories.
