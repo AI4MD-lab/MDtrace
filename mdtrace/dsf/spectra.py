@@ -17,6 +17,9 @@ import numpy as np
 from mdtrace.dsf.partials import combine_partials, species_layout
 
 
+PLANCK_MEV_PS = 4.135667696
+
+
 def block_spectra(positions, q_cart, coherent_weights, incoherent_weights_sq,
                   *, dt_ps, velocities=None, normalization="density",
                   window="none", subtract_mean=False, species_labels=None):
@@ -117,3 +120,12 @@ def block_spectra(positions, q_cart, coherent_weights, incoherent_weights_sq,
     if species_labels is not None:
         result.update(combine_partials(result, pairs, species_coh, species_inc))
     return result
+
+
+def mean_and_sem(blocks: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    values = np.stack(blocks, axis=0)
+    mean = np.mean(values, axis=0)
+    if len(values) == 1:
+        return mean, np.full(mean.shape, np.nan)
+    sem = np.std(values, axis=0, ddof=1) / np.sqrt(len(values))
+    return mean, sem

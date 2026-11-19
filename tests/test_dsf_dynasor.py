@@ -18,7 +18,7 @@ from ase import Atoms, units
 from ase.io.trajectory import Trajectory as ASETrajectory
 from numba import set_num_threads
 
-from mdtrace.dsf.dsf import _neutron_weights
+from mdtrace.dsf.scattering import neutron_weights as _neutron_weights
 from mdtrace.dsf.partials import species_layout
 from mdtrace.dsf.qpoints import build_qpoints
 from mdtrace.dsf.spectra import block_spectra

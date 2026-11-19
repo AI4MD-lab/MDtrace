@@ -9,10 +9,10 @@ import unittest
 
 import numpy as np
 
+from mdtrace.dsf.scattering import neutron_weights as _neutron_weights
 from mdtrace.dsf.dsf import (
     PLANCK_MEV_PS,
     _map_atom_labels,
-    _neutron_weights,
     compute_dsf,
     save_dsf,
 )

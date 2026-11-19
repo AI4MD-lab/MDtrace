@@ -8,7 +8,6 @@ SEM, preserving covariance across Q points, species and frequency bins.
 
 import argparse
 from copy import deepcopy
-import json
 from pathlib import Path
 from types import SimpleNamespace
 import warnings
@@ -17,17 +16,10 @@ import numpy as np
 from scipy.signal import fftconvolve
 
 from mdtrace.dsf.partials import combine_partials
+from mdtrace.dsf.results import load_spectra, save_dsf
+from mdtrace.dsf.scattering import neutron_weights
+from mdtrace.dsf.spectra import PLANCK_MEV_PS, mean_and_sem
 from mdtrace.dsf.qpoints import average_q_groups, sampling_diagnostics
-
-
-def load_spectra(path):
-    with np.load(path, allow_pickle=False) as archive:
-        result = {key: archive[key] for key in archive.files if key != "metadata_json"}
-        result["metadata"] = json.loads(str(archive["metadata_json"]))
-    metadata = result["metadata"]
-    for key in ("q_mode", "q_axis_label", "q_path_labels", "num_blocks", "block_size", "frames_cropped"):
-        result[key] = metadata[key]
-    return result
 
 
 def _blocks(result):
@@ -39,15 +31,13 @@ def _blocks(result):
 
 
 def _summarize(result, blocks, operation):
-    from mdtrace.dsf.dsf import _mean_and_sem
-
     result = dict(result)
     result["metadata"] = deepcopy(result["metadata"])
     for name, values in blocks.items():
         result["qblocks__" + name] = values
-        result["qresolved__" + name], result["qresolved__" + name + "_sem"] = _mean_and_sem(values)
+        result["qresolved__" + name], result["qresolved__" + name + "_sem"] = mean_and_sem(values)
         grouped = [average_q_groups(block, result) for block in values]
-        result[name], result[name + "_sem"] = _mean_and_sem(grouped)
+        result[name], result[name + "_sem"] = mean_and_sem(grouped)
     result["metadata"]["spectrum_names"] = list(blocks)
     result["metadata"].setdefault("postprocessing", []).append(operation)
     return result
@@ -105,7 +95,6 @@ def reweight_scattering(result, *, experiment="neutron", coherent=None, incohere
     labels/weights changes scattering contrast only, not isotope masses in MD.
     Currents remain number weighted. For number spectra custom weights are invalid.
     """
-    from mdtrace.dsf.dsf import _neutron_weights
 
     blocks = _blocks(result)
     labels = np.asarray(result["metadata"]["species_labels"])
@@ -117,7 +106,7 @@ def reweight_scattering(result, *, experiment="neutron", coherent=None, incohere
         b, inc_sq = np.ones(len(labels)), np.zeros(len(labels))
     elif experiment == "neutron":
         if coherent is None and incoherent is None:
-            b, inc_sq = _neutron_weights(labels)
+            b, inc_sq = neutron_weights(labels)
         elif coherent is None or incoherent is None:
             raise ValueError("provide both coherent and incoherent custom length mappings")
         else:
@@ -146,7 +135,6 @@ def apply_resolution(result, fwhm_mev, *, kind="gaussian"):
     leaving the saved frequency range is lost, not silently renormalized.
     This is classical instrumental broadening, not a quantum correction.
     """
-    from mdtrace.dsf.dsf import PLANCK_MEV_PS
 
     blocks = _blocks(result)
     frequencies = result["freq_thz"]
@@ -182,7 +170,6 @@ def apply_resolution(result, fwhm_mev, *, kind="gaussian"):
 
 def to_energy_density(result):
     """Convert per-THz spectra and uncertainties to per-meV with E=h*f."""
-    from mdtrace.dsf.dsf import PLANCK_MEV_PS
 
     if result["metadata"]["normalization"] != "density":
         raise ValueError("energy-density conversion requires density normalization, not legacy arbitrary units")
@@ -198,8 +185,6 @@ def to_energy_density(result):
 
 
 def main(argv=None):
-    from mdtrace.dsf.dsf import save_dsf
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive")
     parser.add_argument("--output", required=True, help="new output prefix")

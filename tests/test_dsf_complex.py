@@ -8,9 +8,9 @@ import warnings
 import numpy as np
 import pytest
 
+from mdtrace.dsf.scattering import neutron_weights as _neutron_weights
 from mdtrace.dsf.dsf import (
     _compute_block_spectra,
-    _neutron_weights,
     compute_dsf,
     save_dsf,
 )

@@ -9,7 +9,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from mdtrace.dsf.dsf import _mean_and_sem, compute_dsf, save_dsf, PLANCK_MEV_PS
+from mdtrace.dsf import compute_dsf, save_dsf
+from mdtrace.dsf.spectra import mean_and_sem as _mean_and_sem, PLANCK_MEV_PS
 from mdtrace.dsf.partials import combine_partials, species_layout
 from mdtrace.dsf.plot import plot_dsf
 from mdtrace.dsf.postprocess import (

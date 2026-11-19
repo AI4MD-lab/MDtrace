@@ -15,44 +15,13 @@
 
 
 """DSF workflow and trajectory preparation."""
-import json
 import sys
 import time
 from pathlib import Path
 
-import numpy as np
-
+from mdtrace.dsf.results import spectra_ready as _dsf_ready
 from mdtrace.io.netcdf import is_netcdf
 from mdtrace.io.prepare import prepare_trajectory
-
-
-def _dsf_ready(params, check_settings=False):
-    from mdtrace.dsf.dsf import _configuration, _source_signature
-
-    try:
-        with np.load(params.out_files_name + ".dsf.npz", allow_pickle=False) as saved:
-            metadata = json.loads(str(saved["metadata_json"]))
-            required = {"sqw", "coherent_sqw", "incoherent_sqw", "self_sqw", "freq_thz", "q_axis"}
-            if metadata["currents"]:
-                required.update(("longitudinal_current", "transverse_current"))
-            if metadata.get("q_resolved"):
-                required.update("qblocks__" + name for name in metadata["spectrum_names"])
-            if metadata.get("partials"):
-                required.update(("pair_density", "species_self"))
-            if not required.issubset(saved.files):
-                return False
-            if check_settings and metadata["configuration"] != _configuration(params):
-                return False
-            if check_settings:
-                if metadata.get("postprocessing"):
-                    return False
-                if metadata["source_signature"] != _source_signature(params):
-                    return False
-            if check_settings:
-                return metadata["format_version"] == 2
-            return metadata["format_version"] in {1, 2}
-    except (OSError, ValueError, KeyError):
-        return False
 
 
 def step_prepare_trajectory(params):

@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plot stored DSF/current spectra without re-reading the MD trajectory."""
 
-import json
 from pathlib import Path
 
 import numpy as np
+
+from mdtrace.dsf.results import load_spectra
 
 
 def _edges(centers):
@@ -21,9 +22,8 @@ def plot_dsf(params):
     from matplotlib.colors import LogNorm
 
     prefix = str(params.out_files_name)
-    with np.load(prefix + ".dsf.npz", allow_pickle=False) as saved:
-        metadata = json.loads(str(saved["metadata_json"]))
-        arrays = {name: saved[name] for name in saved.files if name != "metadata_json"}
+    arrays = load_spectra(prefix + ".dsf.npz")
+    metadata = arrays["metadata"]
     panels = [("sqw", "Density DSF", metadata["intensity_unit"])]
     if metadata["experiment"] == "neutron":
         panels += [("coherent_sqw", "Coherent neutron DSF", metadata["intensity_unit"]),

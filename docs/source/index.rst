@@ -29,6 +29,7 @@ historical 1.1.0 interface.
    :caption: Help and reference
 
    troubleshooting
+   code_architecture
    release_notes
    reference
    publications
