@@ -13,45 +13,16 @@
 #     along with MDTRACE. If not, see <http://www.gnu.org/licenses/>.
 # =============================================================================
 
-"""Detect and prepare the trajectory consumed by MDtrace."""
-
-from __future__ import annotations
+"""Keep MDtrace cache names while delegating conversion to pySED."""
 
 from pathlib import Path
 
-from mdtrace.io.netcdf import (
-    NetCDFReader,
-    converted_file_is_current,
-    is_netcdf,
-)
-from mdtrace.io.text import convert_text_trajectory, detect_text_format
+from pySED.io import prepare_trajectory as prepare_with_pysed
 
 
 def default_converted_path(source: Path) -> Path:
     path = Path(source)
     return path.with_name(f"{path.name}.mdtrace.nc")
-
-
-def detect_trajectory(source: Path) -> str:
-    """Return the actual source format; there is no user format setting."""
-
-    source = Path(source).expanduser()
-    if not source.is_file():
-        raise FileNotFoundError(f"trajectory '{source}' does not exist")
-
-    if not is_netcdf(source):
-        return detect_text_format(source)
-
-    with NetCDFReader(source) as trajectory:
-        if trajectory.info.source_format:
-            return trajectory.info.source_format
-        program = (trajectory.info.source_program or "").lower()
-
-    if "lammps" in program:
-        return "lammps_netcdf"
-    if "gpumd" in program:
-        return "gpumd_netcdf"
-    return "mdtrace_netcdf"
 
 
 def prepare_trajectory(
@@ -64,35 +35,22 @@ def prepare_trajectory(
     text_mode: str = "cache",
     force: bool = False,
 ) -> tuple[Path, str]:
-    """Return the trajectory path selected for the compute pipeline."""
+    """Prepare checked trajectories with pySED's streaming parser and writer.
 
-    source = Path(source).expanduser()
-    source_format = detect_trajectory(source)
-    if is_netcdf(source):
-        return source, source_format
-    if text_mode == "direct":
-        return source, source_format
+    DSF needs positions and truthful per-frame cells. Keep header validation
+    enabled, including when deciding whether an existing cache can be reused.
+    """
     if text_mode != "cache":
-        raise ValueError("text_mode must be 'cache' or 'direct'")
-
-    output = (
-        Path(converted_path)
-        if converted_path is not None
-        else default_converted_path(source)
-    )
-    if force or not converted_file_is_current(
-        output,
-        source,
+        raise ValueError("DSF requires trajectory_read_mode = cache")
+    return prepare_with_pysed(
+        source=source,
+        converted_path=(converted_path if converted_path is not None
+                        else default_converted_path(source)),
+        batch_size=batch_size,
         compression_level=compression_level,
         storage_dtype=storage_dtype,
-    ):
-        convert_text_trajectory(
-            source=source,
-            output=output,
-            source_format=source_format,
-            batch_size=batch_size,
-            compression_level=compression_level,
-            storage_dtype=storage_dtype,
-            lammps_unit=lammps_unit,
-        )
-    return output, source_format
+        lammps_unit=lammps_unit,
+        text_mode=text_mode,
+        force=force,
+        validate_headers=True,
+    )
