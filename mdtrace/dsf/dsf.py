@@ -31,8 +31,8 @@ import warnings
 
 import numpy as np
 
-from mdtrace.io.netcdf import NetCDFReader, is_netcdf
-from mdtrace.io.schema import ATOM_IDS, CELLS, POSITIONS, TIMES, TYPES, VELOCITIES
+from mdtrace.io import NetCDFReader, is_netcdf
+from mdtrace.io import ATOM_IDS, CELLS, POSITIONS, TIMES, TYPES, VELOCITIES
 from mdtrace.dsf.qpoints import average_q_groups, build_qpoints, validate_cell
 from mdtrace.dsf.spectra import PLANCK_MEV_PS, block_spectra, mean_and_sem
 from mdtrace.dsf.scattering import neutron_weights
@@ -209,7 +209,7 @@ def compute_dsf(params):
     keep_q = option("dsf_save_q_resolved") or option("dsf_partials")
     species, pairs = np.empty(0, dtype=str), np.empty((0, 2), dtype=int)
     with NetCDFReader(trajectory_path) as trajectory:
-        trajectory.require_current_cache()
+        trajectory.require_current_cache(validate_headers=True)
         trajectory.require(POSITIONS)
         if option("dsf_currents"):
             if VELOCITIES not in trajectory.info.fields:

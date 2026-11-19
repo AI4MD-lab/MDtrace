@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from mdtrace.dsf.results import spectra_ready as _dsf_ready
-from mdtrace.io.netcdf import is_netcdf
+from mdtrace.io import is_netcdf
 from mdtrace.io.prepare import prepare_trajectory
 
 

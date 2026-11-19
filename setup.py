@@ -27,6 +27,7 @@ setup(
     license_files=["LICENSE"],
     packages=find_packages(exclude=("tests", "tests.*")),
     install_requires=[
+        "pysed-phonon>=3.1,<4",
         "numpy",
         "scipy",
         "netCDF4",

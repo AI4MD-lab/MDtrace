@@ -12,8 +12,8 @@ import pytest
 from mdtrace.parser import read_input
 from mdtrace.pipeline import run
 from mdtrace import pipeline
-from mdtrace.io.netcdf import NetCDFReader
-from tests.io.test_text import GPUMD_TEXT
+from mdtrace.io import NetCDFReader
+from tests.io.fixtures import GPUMD_TEXT
 
 
 def control(tmp_path, text):

@@ -17,7 +17,7 @@ def test_result_and_numerical_modules_do_not_load_compute_or_plotting(statement)
     code = statement + "\n" + """
 import sys
 assert 'mdtrace.dsf.dsf' not in sys.modules
-assert 'mdtrace.io.netcdf' not in sys.modules
+assert 'pySED.io.netcdf' not in sys.modules
 assert 'matplotlib.pyplot' not in sys.modules
 """
     result = subprocess.run(
