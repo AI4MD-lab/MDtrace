@@ -80,6 +80,39 @@ def test_complex_partials_reconstruct_direct_totals_and_preserve_phase(window):
     assert not np.allclose(wrong["coherent_sqw"], direct["coherent_sqw"])
 
 
+@pytest.mark.parametrize("experiment", ["number", "neutron"])
+def test_plot_skips_block_and_partial_arrays_without_changing_image(tmp_path, monkeypatch, experiment):
+    from mdtrace.dsf import plot
+
+    result, params = _sample(tmp_path, experiment=experiment)
+    save_dsf(result, params)
+    archive_path = params.out_files_name + ".dsf.npz"
+    with np.load(archive_path) as archive:
+        archive_type = type(archive)
+        bulk_fields = {name for name in archive.files
+                       if name.startswith(("qblocks__", "qresolved__", "partial_"))
+                       or name in {"pair_density", "species_self"}}
+    assert bulk_fields
+
+    # Reference rendering loads the complete archive, as before this change.
+    with monkeypatch.context() as patch:
+        patch.setattr(plot, "load_spectra", lambda path, **kwargs: load_spectra(path))
+        expected_image = plot_dsf(params).read_bytes()
+
+    original_getitem = archive_type.__getitem__
+
+    def read_without_bulk(self, name):
+        assert name not in bulk_fields, f"plot unnecessarily decompresses {name}"
+        return original_getitem(self, name)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(archive_type, "__getitem__", read_without_bulk)
+        assert plot_dsf(params).read_bytes() == expected_image
+
+    # Full numerical post-processing still has all retained block arrays.
+    assert bulk_fields.issubset(load_spectra(archive_path))
+
+
 def test_reweight_rebin_roundtrip_and_sem_after_averaging(tmp_path):
     result, params = _sample(tmp_path)
     save_dsf(result, params)

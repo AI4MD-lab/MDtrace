@@ -20,18 +20,17 @@ import time
 from pathlib import Path
 
 from mdtrace.dsf.results import spectra_ready as _dsf_ready
-from mdtrace.io import is_netcdf
-from mdtrace.io.prepare import prepare_trajectory
+from mdtrace.io.prepare import default_converted_path, prepare_trajectory
 
 
 def step_prepare_trajectory(params):
-    """Resolve a text trajectory to direct reading or a NetCDF cache."""
+    """Select native NetCDF or convert text to a checked NetCDF cache."""
     source = Path(params.trajectory_file)
     input_directory = Path(params.input_file).parent
-    converted_path = input_directory / f"{source.name}.mdtrace.nc"
+    converted_path = default_converted_path(input_directory / source.name)
 
     t0 = time.perf_counter()
-    prepared, source_format = prepare_trajectory(
+    prepared, _ = prepare_trajectory(
         source=source,
         converted_path=converted_path,
         lammps_unit=params.lammps_unit,
@@ -39,14 +38,10 @@ def step_prepare_trajectory(params):
         compression_level=params.netcdf_compression_level,
         text_mode=params.trajectory_read_mode,
     )
-    params.source_format = source_format
     params.trajectory_path = str(prepared)
     elapsed = time.perf_counter() - t0
-    if prepared == source and is_netcdf(prepared):
+    if prepared == source:
         print(f"  ✓  Reading NetCDF trajectory: {prepared}\n")
-    elif prepared == source:
-        print(f"  ✓  Reading text trajectory directly: {prepared}")
-        print("      NetCDF cache         : disabled\n")
     else:
         print(f"  ✓  Trajectory ready: {prepared} ({elapsed:.1f} s)\n")
 

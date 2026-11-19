@@ -60,9 +60,15 @@ def spectra_ready(params, check_settings=False):
         return False
 
 
-def load_spectra(path):
+def load_spectra(path, *, fields=None):
+    """Load all arrays, or only stored arrays named in fields, plus metadata.
+
+    Restricting fields avoids decompressing block/partial data when plotting.
+    The default retains the complete archive for numerical post-processing.
+    """
     with np.load(path, allow_pickle=False) as archive:
-        result = {key: archive[key] for key in archive.files if key != "metadata_json"}
+        result = {key: archive[key] for key in archive.files
+                  if key != "metadata_json" and (fields is None or key in fields)}
         result["metadata"] = json.loads(str(archive["metadata_json"]))
     metadata = result["metadata"]
     for key in ("q_mode", "q_axis_label", "q_path_labels", "num_blocks", "block_size", "frames_cropped"):

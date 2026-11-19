@@ -22,7 +22,11 @@ def plot_dsf(params):
     from matplotlib.colors import LogNorm
 
     prefix = str(params.out_files_name)
-    arrays = load_spectra(prefix + ".dsf.npz")
+    arrays = load_spectra(prefix + ".dsf.npz", fields={
+        "sqw", "coherent_sqw", "incoherent_sqw",
+        "longitudinal_current", "transverse_current",
+        "freq_thz", "energy_mev", "q_axis", "q_shell_intervals", "q_path_ticks",
+    })
     metadata = arrays["metadata"]
     panels = [("sqw", "Density DSF", metadata["intensity_unit"])]
     if metadata["experiment"] == "neutron":
