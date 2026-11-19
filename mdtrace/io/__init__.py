@@ -13,14 +13,4 @@
 #     along with MDTRACE. If not, see <http://www.gnu.org/licenses/>.
 # =============================================================================
 
-"""MDtrace's trajectory boundary; all readers are provided by pySED."""
-
-from pySED.io import (
-    ATOM_IDS, CELLS, POSITIONS, TIMES, TYPES, VELOCITIES,
-    NetCDFReader, TrajectoryBatch, TrajectoryInfo, is_netcdf,
-)
-
-__all__ = [
-    "NetCDFReader", "TrajectoryBatch", "TrajectoryInfo", "is_netcdf",
-    "POSITIONS", "VELOCITIES", "CELLS", "TYPES", "ATOM_IDS", "TIMES",
-]
+"""Internal trajectory I/O used by the mdtrace command."""

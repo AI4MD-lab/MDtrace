@@ -3,9 +3,8 @@ Code architecture and reading guide
 
 MDtrace currently calculates DSF and particle-current spectra. The package root
 owns the command line, input configuration and workflow. The ``io`` package
-delegates trajectory reading to pySED; ``dsf`` owns the physics and its saved
-results. SED is provided separately by pySED. MDtrace requires the public I/O
-interface introduced in pysed-phonon 3.1.
+reads trajectories; ``dsf`` owns the physics and its saved results. SED is
+provided separately by pySED. This checkout does not depend on pySED.
 
 Module responsibilities
 -----------------------
@@ -18,8 +17,11 @@ Module responsibilities
      parameters.py        Parameter definitions and semantic validation
      pipeline.py          Prepare trajectory; choose compute or plot
      io/
-       __init__.py        Public pySED reader and canonical field imports
-       prepare.py         MDtrace cache names and checked conversion policy
+       schema.py          Canonical fields, units and data containers
+       text.py            GPUMD/LAMMPS text parsing and cache conversion
+       netcdf.py          NetCDF reading, writing and cache validation
+       prepare.py         Format detection and trajectory/cache selection
+       trajectory.py      Retained block/prefetch helpers; unused by DSF
      dsf/
        dsf.py             Trajectory checks, atom alignment, block calculation
        spectra.py         FFT periodograms, normalization and block statistics
@@ -40,9 +42,7 @@ Follow a calculation
 1. ``main.main`` reads input through ``parser.read_input``. Defaults and input
    validation come from ``parameters``.
 2. ``pipeline.step_prepare_trajectory`` selects a native NetCDF trajectory or
-   converts text through ``io.prepare.prepare_trajectory``, which delegates to
-   ``pySED.io.prepare_trajectory(validate_headers=True)``. The optimized pySED
-   parser and chunked/compressed writer are the only conversion implementation.
+   converts text through ``io.prepare.prepare_trajectory``.
 3. ``dsf.compute_dsf`` reads the trajectory, checks sampling/cells/atom IDs,
    builds allowed Q vectors and prepares scattering weights.
 4. ``spectra.block_spectra`` computes density, self, current and optional partial
@@ -101,24 +101,15 @@ Where to make a change
    * - Neutron weights or isotope aliases
      - ``dsf/scattering.py``; preserve reviewed table provenance
    * - Trajectory parsing, units or cache validity
-     - Public ``pySED.io``; MDtrace policy stays in ``io/prepare.py``
+     - ``io/text.py``, ``io/netcdf.py`` and ``io/prepare.py``
    * - User options or command-line stages
      - ``parameters.py``, ``parser.py`` and ``pipeline.py``
 
 Keep one implementation per numerical operation. Add modules for distinct
 responsibilities, not individual small helpers. Future trajectory analyses
 should share ``io`` without depending on DSF-specific formulas or output files.
-The DSF block loop uses ``NetCDFReader.read(field, frames)``. Do not use pySED's
-SED block source: it intentionally omits positions. Native NetCDF reads stay
-field-selective; text conversion uses bounded batches. GPUMD frame headers are
-checked during conversion, with identical consecutive headers parsed only once.
-DSF still owns atom alignment, fixed-cell/time checks and m/s to Angstrom/ps
-conversion for particle currents. Result filenames and formats are unchanged.
-
-Common parsing, precision, compression and cache tests belong to pySED. MDtrace
-keeps integration tests in ``tests/io/test_pysed_integration.py`` and its DSF
-numerical tests. The former duplicate reader and SED block implementations have
-been removed.
+CPU/GPU backend frameworks and new trajectory interfaces are not part of this
+cleanup. The existing I/O behavior and result format remain unchanged.
 
 Run ``python -B -m pytest -q`` from the repository root. Tests cover numerical
 reference sums, invariants, atom alignment, both text formats, cache behavior,
