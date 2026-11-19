@@ -16,29 +16,9 @@ From source
 The required NumPy, SciPy, netCDF4, Matplotlib, and Seaborn dependencies are
 installed automatically.
 
-Optional CuPy backend
----------------------
+DSF execution
+-------------
 
-Install exactly one CuPy wheel matching the CUDA major version available on
-the machine:
-
-.. code-block:: bash
-
-   # Choose one; do not install both.
-   python -m pip install cupy-cuda12x
-   python -m pip install cupy-cuda13x
-
-Alternatively:
-
-.. code-block:: bash
-
-   conda install -c conda-forge cupy
-
-Enable the GPU SED kernel with
-
-.. code-block:: text
-
-   backend = cupy
-
-The current implementation uses one GPU per MDtrace process. CuPy accelerates
-SED computation; plotting and spectral fitting remain CPU operations.
+The current DSF calculation uses serial NumPy. CUDA and CuPy are not required.
+Installing CuPy does not enable a DSF GPU backend. This development checkout
+retains its own trajectory readers and does not require pySED to be installed.

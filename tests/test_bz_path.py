@@ -1,15 +1,13 @@
-"""Exact path intersections, reciprocal geometry, and SED phase invariance."""
+"""Exact path intersections, reciprocal geometry, and periodic phase invariance."""
 
 from fractions import Fraction as F
 import math
 from random import Random
-from types import SimpleNamespace
 import unittest
 
 import numpy as np
 
-from mdtrace.sed.construct_BZ import BZPathHelper
-from mdtrace.sed.Phonon import _calculate_q_batch
+from mdtrace.dsf.commensurate import BZPathHelper
 
 
 def enumerate_integer_planes(start, end, matrix):
@@ -188,18 +186,16 @@ class BZPathTests(unittest.TestCase):
                 reversed_points, _ = helper.build_commensurate_path(end, start)
                 np.testing.assert_allclose(reversed_points, points[::-1], atol=1e-13, rtol=0)
 
-    def test_sed_is_invariant_under_supercell_image_changes(self):
+    def test_phase_is_invariant_under_supercell_image_changes(self):
         rng = np.random.default_rng(134)
-        config = SimpleNamespace(output_partial=False, masses=np.array([1.0]), amu_2_kg=1.0)
-        velocities = rng.normal(size=(32, 8, 3))
         for primitive in [np.diag([3., 3., 4.]), np.array([[3., 0, 0], [1., 2.8, 0], [.4, .2, 4.]])]:
             matrix = np.array([[4, 1, 0], [0, 6, 0], [0, 0, 2]])
             helper = BZPathHelper(primitive, matrix @ primitive)
             points, _ = helper.build_commensurate_path([0, 0, 0], [.5, 0, 0])
             positions = rng.integers(0, 3, size=(8, 3)) @ primitive
             shifted = positions + rng.integers(-2, 3, size=(8, 3)) @ helper.supercell
-            original = _calculate_q_batch(velocities, positions, points, (np.arange(8),), config)
-            images = _calculate_q_batch(velocities, shifted, points, (np.arange(8),), config)
+            original = np.exp(1j * (positions @ points.T))
+            images = np.exp(1j * (shifted @ points.T))
             np.testing.assert_allclose(images, original, atol=1e-9, rtol=1e-12)
 
 

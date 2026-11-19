@@ -1,34 +1,13 @@
 MDtrace documentation
 =====================
 
-**MDtrace** traces reciprocal-space physics in molecular-dynamics
-trajectories. Version 1.1.0 provides a production workflow for calculating,
-plotting, decomposing, and fitting phonon spectral energy density (SED).
+The current development checkout computes density dynamic structure factors
+(DSF) and longitudinal/transverse particle-current spectra for fixed-cell
+periodic crystals and amorphous systems.
 
-New users should begin with :doc:`starting`. To look up an input keyword,
-open :doc:`input_parameters`; every supported parameter is listed in a
-clickable index and has its own reference page. Method concepts, files,
-units, fitting conventions, and implementation details are organized under
-the :doc:`sed_workflow/index` chapter.
-
-Choose a starting point
------------------------
-
-.. list-table::
-   :class: parameter-index
-   :header-rows: 1
-   :widths: 28 72
-
-   * - Goal
-     - Start here
-   * - Install MDtrace and run a first calculation
-     - :doc:`Quick start <starting>`
-   * - Find the syntax or default for one keyword
-     - :doc:`Input parameters <input_parameters>`
-   * - Understand the complete SED calculation and fitting workflow
-     - :doc:`SED workflow <sed_workflow/index>`
-   * - Diagnose an input, trajectory, fitting, or output problem
-     - :doc:`Troubleshooting <troubleshooting>`
+SED calculation, fitting and plotting are provided separately by
+`pySED <https://pysed.readthedocs.io/>`_. See :doc:`release_notes` for the
+historical 1.1.0 interface.
 
 .. toctree::
    :maxdepth: 2
@@ -39,16 +18,11 @@ Choose a starting point
    starting
 
 .. toctree::
-   :maxdepth: 4
-   :caption: Input parameters
+   :maxdepth: 3
+   :caption: DSF analysis
 
    input_parameters
-
-.. toctree::
-   :maxdepth: 2
-   :caption: SED workflow
-
-   sed_workflow/index
+   dsf_workflow
 
 .. toctree::
    :maxdepth: 2

@@ -1,0 +1,7 @@
+# Plot the result produced by postprocessing with --output neutron_qens --per-mev.
+method = dsf
+action = plot
+out_files_name = neutron_qens
+dsf_plot_energy_min = -2
+dsf_plot_energy_max = 2
+dsf_plot_scale = linear

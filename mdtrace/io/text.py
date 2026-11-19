@@ -121,6 +121,31 @@ def _stack_batch(start: int, frames: list[dict[str, np.ndarray]]):
     return TrajectoryBatch(start=start, data=data)
 
 
+def _xyz_columns(comment, n_columns):
+    """Locate numeric XYZ properties after the leading species column."""
+    match = re.search(r'properties\s*=\s*"?([^"\s]+)', comment, flags=re.IGNORECASE)
+    if not match:
+        if n_columns != 3:
+            raise ValueError("GPUMD XYZ with extra columns must declare Properties, including vel:R:3 for velocities")
+        return {"pos": slice(0, 3)}
+    tokens = match.group(1).split(":")
+    if len(tokens) % 3 or tokens[:3] != ["species", "S", "1"]:
+        raise ValueError("GPUMD XYZ Properties must start with species:S:1 and contain name:type:count triples")
+    columns, offset = {}, 0
+    for index in range(3, len(tokens), 3):
+        name, kind, count = tokens[index:index + 3]
+        count = int(count)
+        if count < 1 or kind not in {"R", "I"} or name in columns:
+            raise ValueError("GPUMD XYZ numeric Properties must have unique names and positive R/I column counts")
+        columns[name] = slice(offset, offset + count)
+        if name in {"pos", "vel"} and count != 3:
+            raise ValueError(f"GPUMD XYZ property {name} must contain 3 components")
+        offset += count
+    if "pos" not in columns or offset != n_columns:
+        raise ValueError("GPUMD XYZ Properties must include pos:R:3 and match the atom column count")
+    return columns
+
+
 def iter_gpumd_xyz(
     path: Path,
     batch_size: int = 32,
@@ -188,14 +213,15 @@ def iter_gpumd_xyz(
             elif n_columns != expected_columns:
                 raise ValueError("GPUMD XYZ columns changed between frames")
             values = values.reshape(n_atoms, n_columns)
+            columns = _xyz_columns(comment, n_columns)
 
             frame = {
-                POSITIONS: values[:, :3],
+                POSITIONS: values[:, columns["pos"]],
                 TYPES: atom_types,
                 ATOM_IDS: np.arange(1, n_atoms + 1, dtype=np.int64),
             }
-            if n_columns >= 6:
-                frame[VELOCITIES] = values[:, 3:6] * 100000.0
+            if "vel" in columns:
+                frame[VELOCITIES] = values[:, columns["vel"]] * 100000.0
             cell = _lattice_from_comment(comment)
             if cell is not None:
                 frame[CELLS] = cell
@@ -394,12 +420,14 @@ def convert_text_trajectory(
         batches = iter_gpumd_xyz(
             source,
             batch_size=batch_size,
+            dtype=np.dtype(storage_dtype),
             progress=progress,
         )
     elif source_format == LAMMPS_DUMP:
         batches = iter_lammps_dump(
             source,
             batch_size=batch_size,
+            dtype=np.dtype(storage_dtype),
             lammps_unit=lammps_unit,
             progress=progress,
         )

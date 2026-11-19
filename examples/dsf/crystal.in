@@ -1,0 +1,27 @@
+# Crystal Si template. Supply a fixed-cell GPUMD trajectory with positions
+# and velocities. Replace this primitive cell with the cell actually used
+# in the trajectory, in the same Cartesian orientation.
+method = dsf
+action = thinking
+experiment = number
+trajectory_file = crystal.xyz
+out_files_name = crystal_dsf
+time_step = 1
+output_data_stride = 10
+num_blocks = 4
+
+prim_unitcell = 0 2.7155 2.7155  2.7155 0 2.7155  2.7155 2.7155 0
+dsf_q_mode = path
+dsf_q_path = 0 0 0  0 1/2 1/2  1/2 1/2 1/2
+dsf_q_path_labels = G X L
+dsf_currents = 1
+dsf_save_q_resolved = 1
+dsf_normalization = density
+dsf_window = hann
+dsf_subtract_mean = 1
+dsf_plot_frequency_max = 20
+
+# For neutron-weighted density spectra instead, use:
+# experiment = neutron
+# atom_types = Si
+# Particle currents always retain number weights.

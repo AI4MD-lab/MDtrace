@@ -1,0 +1,23 @@
+# Isotropic amorphous material: no primitive lattice or basis.in is needed.
+# Supply a fixed-cell GPUMD trajectory containing positions and velocities.
+method = dsf
+action = thinking
+experiment = number
+trajectory_file = amorphous.xyz
+out_files_name = amorphous_dsf
+time_step = 1
+output_data_stride = 10
+num_blocks = 4
+
+dsf_q_mode = spherical
+dsf_q_min = 0.1
+dsf_q_max = 3.0
+dsf_q_bin_width = 0.05
+dsf_max_points_per_shell = 100
+dsf_seed = 0
+dsf_currents = 1
+dsf_save_q_resolved = 1
+dsf_normalization = density
+dsf_window = hann
+dsf_subtract_mean = 1
+dsf_plot_frequency_max = 20

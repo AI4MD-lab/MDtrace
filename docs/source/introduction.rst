@@ -1,24 +1,19 @@
 Introduction
 ============
 
-MDtrace extracts reciprocal-space observables from molecular-dynamics
-trajectories. Its current production workflow calculates phonon spectral energy
-density (SED), which shows how kinetic energy is distributed over wave vector
-and frequency.
+MDtrace analyzes density fluctuations and particle currents in molecular-dynamics
+trajectories. The same DSF calculation supports crystal Q paths and spherical
+averages for isotropic amorphous systems.
 
-The SED workflow can:
+The current implementation provides coherent, incoherent and self spectra,
+longitudinal/transverse number-current spectra, element-pair decomposition,
+neutron reweighting, and independent spectral post-processing. See
+:doc:`dsf_workflow` for definitions, units, limitations and validation.
 
-- construct exact Q points commensurate with a finite MD supercell,
-- calculate total or element/direction-resolved SED,
-- use serial NumPy, shared-memory multiprocessing, or optional CuPy,
-- plot phonon dispersions and individual Q-point spectra,
-- fit Lorentz or velocity-DHO peak centers and widths.
+Use a fixed, fully periodic cell and uniformly sampled frames. Velocities are
+needed only for currents. DSF runs on serial NumPy and reads native NetCDF or
+text trajectories converted to a NetCDF cache. EELS remains planned.
 
-MDtrace reads compatible NetCDF trajectories directly. GPUMD extended XYZ and
-one-file LAMMPS custom dumps are detected automatically and can either be
-streamed directly once during SED computation or converted to a reusable
-NetCDF cache. Optional one-block background prefetch is shared by both paths.
-
-Version 1.1.0 supports SED calculation, plotting, and fitting. Dynamic structure
-factor (DSF) and electron energy-loss spectroscopy (EELS) are planned future
-extensions and are not part of the supported 1.1.0 workflow.
+SED computation, peak fitting and phonon-lifetime output are provided separately
+by `pySED <https://pysed.readthedocs.io/>`_. This development change does not
+modify existing trajectories or previously calculated SED results.

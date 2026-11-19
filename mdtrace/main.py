@@ -63,12 +63,7 @@ def _print_banner():
 def _print_run_summary(input_file, params):
     """Print one aligned panel describing the task about to run."""
 
-    if params.backend == "cupy":
-        backend = "CuPy (single GPU)"
-    elif params.max_cores == 1:
-        backend = "NumPy (1 CPU process)"
-    else:
-        backend = f"NumPy (up to {params.max_cores} CPU processes)"
+    backend = "NumPy (serial DSF)" if params.method == "dsf" else "not implemented"
 
     border = f"{_BANNER_INDENT}{'=' * _BANNER_WIDTH}"
     divider = f"{_BANNER_INDENT}{'-' * _BANNER_WIDTH}"
@@ -91,60 +86,29 @@ USAGE:
     mdtrace -h
 
 DESCRIPTION:
-    MDtrace 1.1.0 computes phonon spectral energy density (SED), plots
-    reciprocal-space spectra, and fits spectral peaks:
+    MDtrace computes density dynamic structure factors (DSF) and
+    longitudinal/transverse particle-current spectra from MD trajectories.
+    Periodic crystals and amorphous systems require fixed simulation cells.
+    EELS remains a planned extension.
+    SED calculation, plotting, and fitting are provided separately by pySED.
 
-      method = sed   →  SED compute, plot, and Lorentz/DHO fitting
+CONTROL:
+    method = dsf           # default analysis method
+    action = thinking      # compute changed/missing DSF data, then plot
+    action = compute       # always recompute DSF numerical output
+    action = plot          # plot an existing .dsf.npz archive
+    backend = numpy        # serial CPU DSF; GPU DSF is not implemented
 
-    DSF and EELS are planned extensions and are not part of the
-    supported 1.1.0 workflow.
+TRAJECTORY:
+    GPUMD XYZ, LAMMPS custom dumps, and compatible NetCDF are supported.
+    trajectory_read_mode = cache
+    Text input is converted to a reusable .mdtrace.nc cache.
+    Currents require velocities; density DSF can use positions alone.
 
-    Supported MD formats: GPUMD, LAMMPS.
-
-    If no input file is given, defaults to 'input.in'.
-
-── Control ───────────────────────────────────────────────────────
-
-    action = thinking      # auto-detect progress (recommended!)
-    action = compute       # always recompute the main numerical output
-    action = plot          # plot existing numerical output
-    action = fit           # fit existing SED output
-
-    method = sed           # supported 1.1.0 method
-
-    backend = numpy        # CPU (default)
-    backend = cupy         # GPU (optional CuPy installation)
-
-── thinking mode ──────────────────────────────────────────────────
-
-    thinking mode automatically detects what has been done and
-    runs the next missing step:
-
-      Text trajectory? → direct stream or reusable .mdtrace.nc cache
-      No .SED data?    → compute + plot
-      SED exists?      → plot if needed, then fit on the next run
-      All done?        → reports complete, suggests re-run actions
-
-    Write your input.in once, then just run:
-
-        mdtrace input.in
-
-    It will progress step by step each time you run it.
-
-── Quick start ───────────────────────────────────────────────────
-
-    # SED computation
-    mdtrace input.in       # method=sed, action=thinking
-
-    # Run the compute stage
-    mdtrace input.in       # action=compute
-
-    # Fit existing SED output
-    mdtrace input.in       # action=fit
-
-REFERENCES:
-    [1] Liang et al., J. Appl. Phys. 138, 075101 (2025).  [original pySED / SED]
-    [2] Thomas et al., Phys. Rev. B 81, 081411 (2010).    [SED method]
+QUICK START:
+    mdtrace input.in
+    See examples/dsf/ and the DSF workflow in the manual for input templates.
+    Without an explicit filename, MDtrace reads input.in only.
 """)
     sys.exit(0)
 
@@ -152,13 +116,10 @@ REFERENCES:
 def _detect_input_file():
     """Resolve input file from CLI args."""
     if len(sys.argv) == 1:
-        # try new format first, then legacy
         if os.path.exists("input.in"):
             return "input.in"
-        elif os.path.exists("input_SED.in"):
-            return "input_SED.in"
         else:
-            print("No input.in or input_SED.in found in current directory.")
+            print("No input.in found in current directory. SED inputs should be run with pySED.")
             print("Run 'mdtrace -h' for help.")
             sys.exit(1)
 
@@ -184,11 +145,13 @@ def main():
     _print_banner()
 
     # ── parse ──
-    params = read_input(input_file)
-    _print_run_summary(input_file, params)
-
-    # ── go ──
-    run_pipeline(params)
+    try:
+        params = read_input(input_file)
+        _print_run_summary(input_file, params)
+        run_pipeline(params)
+    except (ValueError, FileNotFoundError) as error:
+        print(f"\n  ERROR: {error}\n", file=sys.stderr)
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

@@ -7,7 +7,6 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -19,7 +18,6 @@ from mdtrace.io.trajectory import (
     NetCDFBlockSource,
     prefetch_one,
 )
-from mdtrace.sed.Phonon import spectral_energy_density
 from tests.io.test_text import GPUMD_TEXT, LAMMPS_TEXT
 
 NETCDF4_AVAILABLE = importlib.util.find_spec("netCDF4") is not None
@@ -94,43 +92,11 @@ class DirectTrajectoryTests(unittest.TestCase):
 
 @unittest.skipUnless(NETCDF4_AVAILABLE, "netCDF4 is not installed")
 class CachedTrajectoryParityTests(unittest.TestCase):
-    def _calculate_sed(self, source, prefetch):
-        raw_blocks = source.iter_blocks(block_size=4, num_blocks=2)
-        params = SimpleNamespace(
-            total_num_steps=8,
-            output_data_stride=1,
-            num_blocks=2,
-            num_atoms=2,
-            time_step=1.0,
-            backend="numpy",
-            max_cores=1,
-            output_partial=False,
-            trajectory_prefetch=prefetch,
-        )
-        lattice = SimpleNamespace(
-            unitcell_index=np.array([1, 1]),
-            basis_index=np.array([1, 2]),
-            masses=np.array([87.62, 47.867]),
-            qpoints=np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]]),
-            reduced_qpoints=np.array(
-                [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]]
-            ),
-            num_qpoints=2,
-            cell_ref_ids=np.array([0]),
-        )
-        with prefetch_one(raw_blocks, enabled=prefetch) as blocks:
-            first_block = next(blocks)
-            calculator = spectral_energy_density(params, source.info)
-            with redirect_stdout(StringIO()):
-                calculator.compute_sed(
-                    params,
-                    lattice,
-                    first_block,
-                    blocks,
-                )
-        return calculator.freq_fft, calculator.sed_avg
+    def _read_blocks(self, source, prefetch):
+        with prefetch_one(source.iter_blocks(4, 2), enabled=prefetch) as blocks:
+            return list(blocks)
 
-    def test_direct_and_cached_netcdf_produce_the_same_sed(self):
+    def test_direct_and_cached_netcdf_produce_the_same_arrays(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "dump.xyz"
             path.write_text(_gpumd_frames(), encoding="utf-8")
@@ -147,21 +113,20 @@ class CachedTrajectoryParityTests(unittest.TestCase):
                 parser_batch_size=3,
                 lammps_unit="metal",
             )
-            direct_frequency, direct_sed = self._calculate_sed(
+            direct_blocks = self._read_blocks(
                 direct,
                 prefetch=False,
             )
 
             cached = NetCDFBlockSource(cached_path, required_frames=8)
-            cached_frequency, cached_sed = self._calculate_sed(
+            cached_blocks = self._read_blocks(
                 cached,
                 prefetch=True,
             )
 
-            np.testing.assert_array_equal(cached_frequency, direct_frequency)
-            np.testing.assert_allclose(
-                cached_sed,
-                direct_sed,
-                rtol=2.0e-6,
-                atol=0.0,
-            )
+            self.assertEqual(len(cached_blocks), len(direct_blocks))
+            for cached_block, direct_block in zip(cached_blocks, direct_blocks):
+                self.assertEqual(cached_block.start, direct_block.start)
+                self.assertEqual(cached_block.data.keys(), direct_block.data.keys())
+                for field in direct_block.data:
+                    np.testing.assert_allclose(cached_block.data[field], direct_block.data[field], rtol=2e-6, atol=0)

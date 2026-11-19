@@ -9,20 +9,23 @@ from mdtrace.main import _print_run_summary, _show_help
 
 
 class MainOutputTests(unittest.TestCase):
-    def test_help_describes_the_sed_only_1_0_scope(self) -> None:
+    def test_help_describes_dsf_and_redirects_sed_to_pysed(self) -> None:
         output = io.StringIO()
 
         with redirect_stdout(output), self.assertRaises(SystemExit):
             _show_help()
 
         message = output.getvalue()
-        self.assertIn("method = sed", message)
-        self.assertIn("DSF and EELS are planned extensions", message)
-        self.assertNotIn("method = dsf", message)
+        self.assertNotIn("method = sed", message)
+        self.assertNotIn("action = fit", message)
+        self.assertNotIn("backend = cupy", message)
+        self.assertIn("provided separately by pySED", message)
+        self.assertIn("EELS remains a planned extension", message)
+        self.assertIn("method = dsf", message)
 
     def test_run_summary_is_clear_and_aligned(self) -> None:
         params = SimpleNamespace(
-            method="sed",
+            method="dsf",
             action="thinking",
             backend="numpy",
             max_cores=8,
@@ -31,15 +34,15 @@ class MainOutputTests(unittest.TestCase):
         output = io.StringIO()
 
         with redirect_stdout(output):
-            _print_run_summary("input_SED.in", params)
+            _print_run_summary("input.in", params)
 
         message = output.getvalue()
         self.assertIn("🚀 Starting MDtrace task", message)
-        self.assertIn("  Input   : input_SED.in", message)
-        self.assertIn("  Method  : SED", message)
+        self.assertIn("  Input   : input.in", message)
+        self.assertIn("  Method  : DSF", message)
         self.assertIn("  Action  : thinking", message)
         self.assertIn(
-            "  Backend : NumPy (up to 8 CPU processes)",
+            "  Backend : NumPy (serial DSF)",
             message,
         )
         self.assertIn("  Output  : SrTiO3", message)

@@ -57,6 +57,44 @@ ITEM: ATOMS id type x y z vx vy vz
 
 @unittest.skipUnless(NETCDF4_AVAILABLE, "netCDF4 is not installed")
 class TextConversionTests(unittest.TestCase):
+    def test_gpumd_properties_identify_velocity_without_confusing_force_or_mass(self) -> None:
+        cases = (
+            ("species:S:1:mass:R:1:pos:R:3:force:R:3:vel:R:3", "Si 28 1 2 3 99 98 97 .001 .002 .003", True),
+            ("species:S:1:pos:R:3:force:R:3", "Si 1 2 3 99 98 97", False),
+        )
+        for properties, atoms, has_velocity in cases:
+            with self.subTest(properties=properties), TemporaryDirectory() as directory:
+                source = Path(directory) / "dump.xyz"
+                source.write_text(f'1\nLattice="10 0 0 0 10 0 0 0 10" Properties={properties}\n{atoms}\n', encoding="utf-8")
+                prepared, _ = prepare_trajectory(source, storage_dtype="float64")
+                with NetCDFReader(prepared) as trajectory:
+                    np.testing.assert_allclose(trajectory.read(POSITIONS)[0, 0], [1, 2, 3])
+                    self.assertEqual(VELOCITIES in trajectory.info.fields, has_velocity)
+                    if has_velocity:
+                        np.testing.assert_allclose(trajectory.read(VELOCITIES)[0, 0], [100, 200, 300])
+
+    def test_float64_conversion_preserves_precision_and_refreshes_old_cache(self) -> None:
+        from netCDF4 import Dataset
+
+        value = 1.123456789012345
+        for filename, source_text, atom in (
+            ("dump.xyz", GPUMD_TEXT, 1), ("dump.data", LAMMPS_TEXT, 0),
+        ):
+            with self.subTest(filename=filename), TemporaryDirectory() as directory:
+                source = Path(directory) / filename
+                source.write_text(source_text.replace("1.1 ", f"{value:.17g} "), encoding="utf-8")
+                prepared, _ = prepare_trajectory(source, storage_dtype="float64", batch_size=1)
+                with NetCDFReader(prepared) as trajectory:
+                    self.assertEqual(trajectory.read(POSITIONS)[1, atom, 0], value)
+
+                # Version 1 parsed into float32 even when the cache stored float64.
+                with Dataset(str(prepared), "a") as dataset:
+                    dataset.mdtrace_schema_version = 1
+                    dataset.variables["coordinates"][1, atom, 0] = float(np.float32(value))
+                prepare_trajectory(source, storage_dtype="float64", batch_size=1)
+                with NetCDFReader(prepared) as trajectory:
+                    self.assertEqual(trajectory.read(POSITIONS)[1, atom, 0], value)
+
     def test_conversion_prints_progress_and_destination(self) -> None:
         with TemporaryDirectory() as directory:
             source = Path(directory) / "dump.xyz"

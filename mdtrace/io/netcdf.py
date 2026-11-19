@@ -35,7 +35,8 @@ from mdtrace.io.schema import (
 
 _CDF_MAGICS = {b"CDF\x01", b"CDF\x02", b"CDF\x05"}
 _HDF5_MAGIC = b"\x89HDF\r\n\x1a\n"
-_SCHEMA_VERSION = 1
+# Version 3 reads XYZ Properties by name; version 2 fixed float64 parsing.
+_SCHEMA_VERSION = 3
 
 _ALIASES = {
     POSITIONS: ("coordinates", "positions", "position"),
@@ -217,6 +218,15 @@ class NetCDFReader:
     @property
     def info(self) -> TrajectoryInfo:
         return self._info
+
+    def require_current_cache(self) -> None:
+        """Reject outdated MDtrace conversions when strict data semantics matter."""
+        version = getattr(self._dataset, "mdtrace_schema_version", None)
+        if version is not None and int(version) != _SCHEMA_VERSION:
+            raise ValueError(
+                "outdated MDtrace trajectory cache; set trajectory_file to the "
+                "original text trajectory so the cache is regenerated"
+            )
 
     def require(self, *fields: str) -> None:
         missing = sorted(set(fields) - set(self.info.fields))

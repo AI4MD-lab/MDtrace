@@ -71,7 +71,7 @@ def _read_entries(input_file):
 def _select_method(entries):
     """Read the method before choosing its parameter table.
 
-    Defaults to ``"sed"`` when no ``method = ...`` line is present,
+    Defaults to ``"dsf"`` when no ``method = ...`` line is present,
     matching the ``method`` parameter default in ``common_params``.
     """
 
@@ -80,6 +80,8 @@ def _select_method(entries):
         if key == "method":
             method = values[0].strip("'\"").lower()
 
+    if method == "sed":
+        raise ValueError("SED has been removed from MDtrace; use pySED (pysed) for SED calculation, plotting, and fitting")
     if method not in methods:
         supported = ", ".join(methods)
         raise ValueError(
@@ -128,7 +130,7 @@ def read_input(input_file="input.in"):
             ) from error
         setattr(params, key, value)
 
-    for key in ("trajectory_file", "basis_lattice_file"):
+    for key in ("trajectory_file",):
         if not hasattr(params, key):
             continue
         path = Path(getattr(params, key)).expanduser()
