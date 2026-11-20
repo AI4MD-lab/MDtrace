@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import subprocess
 import sys
 
+from mdtrace.dsf.results import load_spectra
+
 import numpy as np
 import pytest
 
@@ -54,9 +56,46 @@ def _write(path, positions, *, velocities=None, cell=2 * np.pi * np.eye(3),
                 variable.units = units
 
 
-@pytest.mark.parametrize("window", ["none", "hann"])
+@pytest.mark.parametrize("legacy, weighting", [("number", "equal"), ("neutron", "neutron")])
+def test_weighting_names_preserve_spectra_and_existing_text(tmp_path, capsys, legacy, weighting):
+    from mdtrace.dsf.results import calculation_configuration
+
+    rng = np.random.default_rng(73)
+    path = tmp_path / "trajectory.nc"
+    positions, velocities = rng.normal(size=(2, 32, 4, 3))
+    _write(path, positions, velocities=velocities, types=np.array([1, 2, 1, 2]))
+    old = _params(path, experiment=legacy, atom_types=["H", "O"], dsf_currents=True,
+                  dsf_partials=True, dsf_output_components=True, max_cores=1)
+    values = vars(old).copy()
+    values.pop("experiment")
+    new = SimpleNamespace(**values, density_weighting=weighting, current_weighting="equal")
+    expected, actual = compute_dsf(old), compute_dsf(new)
+    for name, value in expected.items():
+        if isinstance(value, np.ndarray):
+            np.testing.assert_array_equal(actual[name], value, err_msg=name)
+    assert calculation_configuration(new) == calculation_configuration(old)
+    output = capsys.readouterr().out
+    density_text = ("equal (number density, weight 1 per atom)" if weighting == "equal" else
+                    "neutron (neutron scattering weights)")
+    assert (f"\n\n        Density weighting       : {density_text}\n"
+            "        Current weighting       : equal (particle current, weight 1 per atom)\n"
+            "        Spectral normalization  : density (intensity per THz)") in output
+
+    # Emulate pre-rename text metadata in this test's temporary directory.
+    expected["metadata"].pop("density_weighting")
+    expected["metadata"]["current_weighting"] = "number"
+    save_dsf(expected, old)
+    files = list(tmp_path.glob("trajectory.dsf*"))
+    before = {p: p.read_bytes() for p in files}
+    assert _dsf_ready(new, check_settings=True)
+    loaded = load_spectra(new.out_files_name, for_plot=True)
+    np.testing.assert_array_equal(loaded["sqw"], actual["sqw"])
+    plot_dsf(new)
+    assert all(p.read_bytes() == content for p, content in before.items())
+
+
 @pytest.mark.parametrize("subtract_mean", [False, True])
-def test_density_and_current_integrals_obey_parseval(window, subtract_mean):
+def test_density_and_current_integrals_obey_parseval(subtract_mean):
     rng = np.random.default_rng(50)
     positions = rng.normal(size=(32, 4, 3))
     velocities = rng.normal(size=positions.shape)
@@ -65,14 +104,12 @@ def test_density_and_current_integrals_obey_parseval(window, subtract_mean):
     inc = np.array([3.0, 2.0, 0.0, 1.0])
     dt = 0.02
     spectra = block_spectra(positions, qs, b, inc, dt_ps=dt, velocities=velocities,
-                            window=window, subtract_mean=subtract_mean)
-    taper = np.ones(32) if window == "none" else np.sin(np.pi * np.arange(32) / 32)**2
+                            subtract_mean=subtract_mean)
 
     def time_integral(series):
         if subtract_mean:
             series = series - series.mean(axis=0)
-        return np.sum(taper.reshape((-1,) + (1,) * (series.ndim - 1))**2 * abs(series)**2,
-                      axis=0) / (4 * (taper @ taper))
+        return np.mean(abs(series)**2, axis=0) / 4
 
     for index, q in enumerate(qs):
         phase = np.exp(1j * (positions @ q))
@@ -89,7 +126,7 @@ def test_density_and_current_integrals_obey_parseval(window, subtract_mean):
         }
         for name, reference in expected.items():
             # Frequency-bin integration of the independently calculated time
-            # averages, including window energy and complex neutron amplitudes.
+            # averages, including complex neutron amplitudes.
             np.testing.assert_allclose(spectra[name][index].sum() / (32 * dt), reference, rtol=1e-13)
         np.testing.assert_allclose(
             (spectra["longitudinal_current"][index] + spectra["transverse_current"][index]).sum() / (32 * dt),
@@ -141,7 +178,7 @@ def test_transverse_oscillation_is_visible_in_current_but_not_density():
                                  2 * np.pi * np.array([[1, 0, 0], [0.4, 1.3, 0], [-0.2, 0.1, 0.9]])])
 def test_spherical_sampling_matches_brute_force_reciprocal_lattice(cell):
     params = SimpleNamespace(dsf_q_mode="spherical", dsf_q_min=0.3, dsf_q_max=2.2,
-                             dsf_q_bin_width=0.4, dsf_max_points_per_shell=0)
+                             dsf_q_bin_width=0.4, dsf_max_points=0)
     sample = build_qpoints(params, cell)
     grid = np.array(list(product(range(-4, 5), repeat=3)))
     q = 2 * np.pi * grid @ np.linalg.inv(cell).T
@@ -168,6 +205,110 @@ def test_shell_subsampling_is_reproducible_and_keeps_opposite_directions():
     assert vectors == {tuple(-row) for row in first["q_cart"]}
     params.dsf_seed = 41
     assert not np.array_equal(first["q_cart"], build_qpoints(params, 2 * np.pi * np.eye(3))["q_cart"])
+
+
+@pytest.mark.parametrize("budget", [0, 2, 3, 120, 121, 5000])
+def test_total_q_budget_counts_pairs_and_available_population(budget):
+    params = SimpleNamespace(dsf_q_mode="spherical", dsf_q_max=6.,
+                             dsf_q_bin_width=.5, dsf_max_points=budget, dsf_seed=40)
+    cell = 2 * np.pi * np.eye(3)
+    sample = build_qpoints(params, cell)
+    complete = build_qpoints(SimpleNamespace(**{**vars(params), "dsf_max_points": 0}), cell)
+    available = len(complete["q_cart"])
+    assert len(sample["q_cart"]) == (min(budget // 2 * 2, available) if budget else available)
+    assert sample["q_available_total"] == available
+    assert sample["q_available_shells"] == len(complete["q_axis"])
+    assert sample["q_counts"].sum() == len(sample["q_cart"])
+    vectors = {tuple(row) for row in sample["q_box"]}
+    assert vectors == {tuple(-row) for row in sample["q_box"]}
+    for shell, population in zip(sample["q_shell_intervals"], sample["q_available_counts"]):
+        index = np.flatnonzero(np.all(complete["q_shell_intervals"] == shell, axis=1))[0]
+        assert population == complete["q_counts"][index]
+
+
+def test_total_sampling_preserves_low_q_and_is_independent_of_shell_width_and_chunks(monkeypatch):
+    import mdtrace.dsf.qpoints as sampling
+
+    params = SimpleNamespace(dsf_q_mode="spherical", dsf_q_max=6.,
+                             dsf_q_bin_width=.5, dsf_max_points=120, dsf_seed=40)
+    cell = 2 * np.pi * np.eye(3)
+    first = build_qpoints(params, cell)
+    vectors = {tuple(row) for row in first["q_box"]}
+    assert {tuple(row) for row in np.r_[np.eye(3), -np.eye(3)]} <= vectors
+    np.testing.assert_array_equal(first["q_cart"], build_qpoints(params, cell)["q_cart"])
+    params.dsf_q_bin_width = .2
+    assert {tuple(row) for row in build_qpoints(params, cell)["q_box"]} == vectors
+    original = sampling._reciprocal_points
+
+    def small_chunks(*args):
+        for points, norms in original(*args):
+            for start in range(0, len(points), 7):
+                yield points[start:start + 7], norms[start:start + 7]
+
+    monkeypatch.setattr(sampling, "_reciprocal_points", small_chunks)
+    assert {tuple(row) for row in build_qpoints(params, cell)["q_box"]} == vectors
+    params.dsf_seed = 41
+    assert {tuple(row) for row in build_qpoints(params, cell)["q_box"]} != vectors
+
+
+def test_total_q_budget_runs_through_input_workflow_and_pysed_console(tmp_path, capsys):
+    path = tmp_path / "trajectory.nc"
+    rng = np.random.default_rng(7)
+    positions = rng.uniform(0, 2 * np.pi, size=(16, 4, 3))
+    _write(path, positions, velocities=rng.normal(size=positions.shape))
+    control = tmp_path / "input.in"
+    control.write_text(
+        "action = thinking\nexperiment = number\ntrajectory_file = trajectory.nc\n"
+        f"out_files_name = {tmp_path.as_posix()}/sample\n"
+        "time_step = 1\noutput_data_stride = 5\nnum_blocks = 2\nmax_cores = 1\n"
+        "dsf_q_mode = spherical\ndsf_q_max = 3\ndsf_q_bin_width = .5\n"
+        "dsf_max_points = 24\ndsf_currents = 1\n", encoding="utf-8",
+    )
+    params = read_input(control)
+    run(params)
+    result = load_spectra(params.out_files_name)
+    assert result["q_counts"].sum() == 24
+    assert result["q_available_counts"].sum() > 24
+    assert Path(params.out_files_name + ".dsf.png").is_file()
+    output = capsys.readouterr().out
+    assert "◆  DSF calculation setup" in output
+    assert "        Frame interval          : 0.005 ps" in output
+    assert "        Nyquist frequency       : 100 THz" in output
+    assert "        Total Q vectors         : 24 (user limit: 24)" in output
+    assert "        Shell width (1/Å)       : 0.5\n" in output
+    assert "        Q shell intervals       : 6 (3 / 0.5)" in output
+    assert "Empty Q ranges (1/Å)    : [0, 1)\n" in output
+    assert "Minimum box Q (1/Å)     : Q_min = 2π/L ≈ 1 (L = 6.2832 Å)" in output
+    assert f"Sampled Q shells        : {len(result['q_counts'])} of 6\n" in output
+    assert "Q range (1/Å)" in output
+    assert "Total Q budget" not in output
+    assert "Vectors per shell" not in output
+    assert "Random seed" not in output
+    assert "🚀 Trajectory streaming" in output
+    assert "▶  Block 1/2 [" + "=" * 30 + "] 100%" in output
+    assert "▶  Block 2/2 [" + "=" * 30 + "] 100%" in output
+    assert " s left" in output
+    assert "ETA" not in output and "Time signals" not in output
+    assert "task finished successfully" in output
+
+
+def test_console_distinguishes_empty_ranges_from_unsampled_shells(capsys):
+    from mdtrace.dsf.dsf import _print_q_sampling
+
+    params = SimpleNamespace(dsf_q_mode="spherical", dsf_q_min=.25, dsf_q_max=3.75,
+                             dsf_q_bin_width=.5, dsf_max_points=2)
+    cell = 2 * np.pi * np.diag([1, .1, .1])
+    sampling = build_qpoints(params, cell)
+    _print_q_sampling(params, sampling, cell)
+    output = capsys.readouterr().out
+    assert "Empty Q ranges (1/Å)    : [0.25, 1), [1.5, 2), [2.5, 3), [3.5, 3.75]" in output
+    assert "Sampled Q shells        : 1 of 8\n" in output
+
+    params.dsf_q_min, params.dsf_q_max, params.dsf_q_bin_width = 1., 3., 1.
+    _print_q_sampling(params, build_qpoints(params, cell), cell)
+    output = capsys.readouterr().out
+    assert "Empty Q ranges" not in output
+    assert "Q_min = 2π/L_max ≈ 1 (L_max = 6.2832 Å)" in output
 
 
 def test_crystal_path_preserves_extended_zone_and_nonorthogonal_cell():
@@ -206,8 +347,9 @@ def test_current_spectra_follow_atom_ids_and_do_not_use_neutron_weights(tmp_path
     _write(shuffled, np.take_along_axis(positions, order[:, :, None], axis=1),
            velocities=np.take_along_axis(velocities, order[:, :, None], axis=1),
            types=types[order], ids=ids[order])
-    normal = compute_dsf(_params(reference, dsf_currents=True))
-    neutron = compute_dsf(_params(shuffled, dsf_currents=True, experiment="neutron", atom_types=["3He", "H"]))
+    normal = compute_dsf(_params(reference, dsf_currents=True, dsf_output_components=True))
+    neutron = compute_dsf(_params(shuffled, dsf_currents=True, dsf_output_components=True,
+                                 experiment="neutron", atom_types=["3He", "H"]))
     for name in ("longitudinal_current", "transverse_current", "self_sqw"):
         np.testing.assert_allclose(neutron[name], normal[name], rtol=1e-13, atol=1e-14)
         np.testing.assert_allclose(neutron[name + "_sem"], normal[name + "_sem"], rtol=1e-13, atol=1e-14)
@@ -261,14 +403,14 @@ def test_number_mode_needs_neither_primitive_nor_scattering_table_and_saves_unit
     result = compute_dsf(params)
     np.testing.assert_array_equal(result["incoherent_sqw"], 0)
     assert result["q_frac"].shape == (0, 3)
-    assert np.any(result["self_sqw"] > 0)
+    assert "self_sqw" not in result  # not requested in the minimal density workflow
     assert result["metadata"]["intensity_unit"] == "1/THz"
     save_dsf(result, params)
     assert _dsf_ready(params)
-    with np.load(params.out_files_name + ".dsf.npz", allow_pickle=False) as saved:
-        np.testing.assert_array_equal(saved["sqw"], result["sqw"])
-        assert json.loads(str(saved["metadata_json"]))["current_weighting"] == "number"
-    assert "per THz" in Path(params.out_files_name + ".dsf_meV").read_text()
+    saved = load_spectra(params.out_files_name)
+    np.testing.assert_array_equal(saved["sqw"], result["sqw"])
+    assert saved["metadata"]["current_weighting"] == "equal"
+    assert saved["metadata"]["spectral_density_axis"] == "frequency_thz"
     assert plot_dsf(params).stat().st_size > 10000
 
 
@@ -292,19 +434,19 @@ def test_gpumd_thinking_pipeline_computes_current_spectra_and_plot(tmp_path):
     run(params)
     assert _dsf_ready(params, check_settings=True)
     assert Path(str(prefix) + ".dsf.png").stat().st_size > 10000
-    old_time = Path(str(prefix) + ".dsf.npz").stat().st_mtime_ns
+    old_time = Path(str(prefix) + ".dsf_Qaxis").stat().st_mtime_ns
     run(params)
-    assert Path(str(prefix) + ".dsf.npz").stat().st_mtime_ns == old_time
+    assert Path(str(prefix) + ".dsf_Qaxis").stat().st_mtime_ns == old_time
     # A changed numerical setting must not silently reuse a previous spectrum.
     params.dsf_subtract_mean = True
     assert not _dsf_ready(params, check_settings=True)
-    with np.load(str(prefix) + ".dsf.npz", allow_pickle=False) as saved:
-        assert np.isfinite(saved["longitudinal_current"]).all()
-        assert np.isfinite(saved["transverse_current"]).all()
-        # Average total number-current squared: only self terms survive after
-        # averaging +/-x,+/-y,+/-z for the orthogonal velocity directions.
-        integral = (saved["longitudinal_current"] + saved["transverse_current"]).sum(axis=1) / .08
-        np.testing.assert_allclose(integral, (1**2 + 2**2) / 2, rtol=2e-6)
+    saved = load_spectra(str(prefix))
+    assert np.isfinite(saved["longitudinal_current"]).all()
+    assert np.isfinite(saved["transverse_current"]).all()
+    # Average total number-current squared: only self terms survive after
+    # averaging +/-x,+/-y,+/-z for the orthogonal velocity directions.
+    integral = (saved["longitudinal_current"] + saved["transverse_current"]).sum(axis=1) / .08
+    np.testing.assert_allclose(integral, (1**2 + 2**2) / 2, rtol=2e-6)
 
 
 def test_crystal_cli_resolves_known_longitudinal_and_transverse_modes(tmp_path):
@@ -326,7 +468,7 @@ def test_crystal_cli_resolves_known_longitudinal_and_transverse_modes(tmp_path):
         f'out_files_name = "{prefix}"\ntime_step = 1\noutput_data_stride = 10\nnum_blocks = 2\n'
         'prim_unitcell = 1 0 0 0 1 0 0 0 1\ndsf_q_mode = path\n'
         'dsf_q_path = 0 0 0 1/2 0 0\ndsf_q_path_labels = G X\ndsf_currents = 1\n'
-        'dsf_subtract_mean = 1\ndsf_plot_frequency_max = 5\n', encoding="utf-8",
+        'dsf_subtract_mean = 1\ndsf_plot_frequency_max = 5\ndsf_output_sem = 1\n', encoding="utf-8",
     )
     completed = subprocess.run(
         [sys.executable, "-B", "-m", "mdtrace.main", str(control)],
@@ -334,17 +476,20 @@ def test_crystal_cli_resolves_known_longitudinal_and_transverse_modes(tmp_path):
         encoding="utf-8", env={**os.environ, "MPLBACKEND": "Agg", "PYTHONIOENCODING": "utf-8"},
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    with np.load(str(prefix) + ".dsf.npz", allow_pickle=False) as saved:
-        np.testing.assert_allclose(saved["q_frac"][:, 0], [0, .25, .5])
-        frequencies = saved["freq_thz"]
-        positive = frequencies > 0
-        for name, expected in (("sqw", f_long), ("longitudinal_current", f_long),
-                               ("transverse_current", f_trans)):
-            peak = frequencies[positive][saved[name][1, positive].argmax()]
-            assert peak == pytest.approx(expected)
-            np.testing.assert_allclose(saved[name + "_sem"][1], 0, atol=1e-14)
-        assert np.isnan(saved["longitudinal_current"][0]).all()
-        assert np.isnan(saved["transverse_current_sem"][0]).all()
+    saved = load_spectra(str(prefix))
+    np.testing.assert_allclose(saved["q_axis"], [0, np.pi / 2, np.pi])
+    np.testing.assert_allclose(saved["q_path_ticks"], [0, np.pi])
+    assert saved["q_path_labels"] == ["G", "X"]
+    assert "q_frac" not in saved
+    frequencies = saved["freq_thz"]
+    positive = frequencies > 0
+    for name, expected in (("sqw", f_long), ("longitudinal_current", f_long),
+                           ("transverse_current", f_trans)):
+        peak = frequencies[positive][saved[name][1, positive].argmax()]
+        assert peak == pytest.approx(expected)
+        np.testing.assert_allclose(saved[name + "_sem"][1], 0, atol=1e-14)
+    assert np.isnan(saved["longitudinal_current"][0]).all()
+    assert np.isnan(saved["transverse_current_sem"][0]).all()
     assert Path(str(prefix) + ".dsf.png").stat().st_size > 10000
     # Plot-only use must not require the production trajectory or compute input.
     path.unlink()
@@ -359,12 +504,13 @@ def test_distributed_templates_parse_without_external_structure_files(filename):
     path = Path(__file__).resolve().parents[1] / "examples" / "dsf" / filename
     params = read_input(path)
     assert params.method == "dsf" and params.dsf_currents
-    assert params.experiment == "number"
+    assert params.density_weighting == "equal"
+    assert params.current_weighting == "equal"
 
 
 def test_compute_api_validates_options_even_with_plot_action(tmp_path):
-    params = _params(tmp_path / "unused.nc", action="plot", backend="cupy")
-    with pytest.raises(ValueError, match="backend = numpy only"):
+    params = _params(tmp_path / "unused.nc", action="plot", device="wrong")
+    with pytest.raises(ValueError, match="device must be cpu or gpu"):
         compute_dsf(params)
 
 
@@ -380,6 +526,10 @@ def test_direct_use_of_outdated_text_cache_requires_regeneration(tmp_path):
 
 @pytest.mark.parametrize("settings,match", [
     ("dsf_q_mode = spherical\ndsf_q_max = 0", "dsf_q_min"),
+    ("dsf_q_mode = spherical\ndsf_q_max = 2\ndsf_max_points = -2", "dsf_max_points"),
+    ("dsf_q_mode = spherical\ndsf_q_max = 2\ndsf_max_points = 1", "at least 2"),
+    ("dsf_q_mode = spherical\ndsf_q_max = 2\ndsf_max_points = 20\n"
+     "dsf_max_points_per_shell = 10", "not both"),
     ("dsf_q_mode = spherical\ndsf_q_max = 2\ndsf_max_points_per_shell = 3", "positive even"),
     ("dsf_q_mode = path\ndsf_q_path = 0 0 0 0.5 0 0", "prim_unitcell"),
     ("dsf_q_coordinates = cartesian\ndsf_qpoints = 1 0", "groups of 3"),
@@ -391,3 +541,47 @@ def test_new_parameters_reject_ambiguous_or_invalid_input(tmp_path, settings, ma
                        "output_data_stride = 1\n" + settings + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match=match):
         read_input(control)
+
+
+@pytest.mark.parametrize("mode", ["number", "neutron", "partials"])
+@pytest.mark.parametrize("subtract_mean", [False, True])
+def test_optional_self_fft_preserves_requested_spectra(mode, subtract_mean, monkeypatch):
+    rng = np.random.default_rng(80)
+    positions, velocities = rng.normal(size=(2, 33, 5, 3))
+    q = np.array([[1., 0, 0], [-1., 0, 0], [0, 0, 0]])
+    coherent = np.ones(5, complex) if mode == "number" else np.full(5, 2+3j)
+    incoherent = np.full(5, .7) if mode == "neutron" else np.zeros(5)
+    kwargs = dict(dt_ps=.01, velocities=velocities, subtract_mean=subtract_mean,
+                  species_labels=np.array(["H"]*5) if mode == "partials" else None)
+    reference = block_spectra(positions, q, coherent, incoherent, **kwargs)
+    original_fft = np.fft.fft
+    atom_ffts = []
+
+    def tracked_fft(values, *args, **kwargs):
+        if values.shape == (33, 5):
+            atom_ffts.append(values.shape)
+        return original_fft(values, *args, **kwargs)
+
+    monkeypatch.setattr(np.fft, "fft", tracked_fft)
+    result = block_spectra(positions, q, coherent, incoherent, compute_self=False, **kwargs)
+    assert ("self_sqw" in result) == (mode == "partials")
+    assert bool(atom_ffts) == (mode != "number")
+    for name, values in result.items():
+        np.testing.assert_array_equal(values, reference[name], err_msg=name)
+
+
+@pytest.mark.parametrize("cap", [2, 0])
+def test_q_warning_distinguishes_subsampling_from_full_box_coverage(cap):
+    from mdtrace.dsf.qpoints import coverage_warning
+
+    sample = build_qpoints(SimpleNamespace(dsf_q_mode="spherical", dsf_q_max=1.1,
+                           dsf_q_bin_width=1.1, dsf_max_points_per_shell=cap),
+                           2*np.pi*np.eye(3))
+    np.testing.assert_array_equal(sample["q_available_counts"], [6])
+    np.testing.assert_array_equal(sample["q_counts"], [cap or 6])
+    np.testing.assert_allclose(sample["q_sampling_fraction"], [(cap or 6)/6])
+    assert sample["q_direction_counts"][0] == (cap or 6)//2
+    message = coverage_warning(sample)
+    assert ("sampled subset" in message) == bool(cap)
+    assert ("all allowed box vectors" in message) == (not cap)
+    assert "heuristic" in message

@@ -21,9 +21,9 @@ Common parameters
    * - ``method``
      - ``dsf``
      - DSF is the default. EELS remains planned; use pySED for SED.
-   * - ``backend``
-     - ``numpy``
-     - Serial NumPy DSF. The SED CuPy backend has been removed.
+   * - ``device``
+     - ``cpu``
+     - Use ``cpu`` for NumPy or ``gpu`` for CuPy on one CUDA GPU.
    * - ``trajectory_file``
      - ``dump.xyz``
      - XYZ, LAMMPS dump or NetCDF. Relative paths resolve against the control file.
@@ -38,7 +38,7 @@ Common parameters
      - DSF requires cache. Native NetCDF is read directly; text is converted.
    * - ``trajectory_prefetch``
      - ``1``
-     - Retained for input compatibility; DSF does not use the prefetch helper.
+     - Prefetch one small frame batch for density/current DSF; atom-wise spectra keep the full-block path.
    * - ``netcdf_compression_level``
      - ``1``
      - Integer zlib level 0 through 9. Zero disables text-cache compression.
@@ -56,7 +56,7 @@ Common parameters
      - Equal non-overlapping DSF blocks; trailing frames are cropped with a warning.
    * - ``max_cores``
      - ``4``
-     - Positive compatibility setting; DSF currently runs serially.
+     - Maximum DSF worker processes; actual count respects CPU and memory limits.
    * - ``prim_unitcell``
      - ``None``
      - Nine row-vector components in Angstrom; needed for fractional Q points and paths.

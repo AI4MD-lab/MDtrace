@@ -28,7 +28,7 @@ NETCDF4_AVAILABLE = importlib.util.find_spec("netCDF4") is not None
 
 def _params(trajectory_path: Path, output: Path, num_blocks: int = 1):
     return SimpleNamespace(
-        backend="numpy",
+        device="cpu",
         experiment="neutron",
         trajectory_path=str(trajectory_path),
         dsf_qpoints=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
@@ -36,6 +36,7 @@ def _params(trajectory_path: Path, output: Path, num_blocks: int = 1):
         atom_types=["H", "O"],
         dsf_cell=np.eye(3),
         dsf_normalization="legacy",
+        dsf_output_sem=True,
         num_blocks=num_blocks,
         time_step=1000.0,
         output_data_stride=1,
@@ -115,7 +116,7 @@ class DSFTypeMappingTests(unittest.TestCase):
     def test_dsf_validation_rejects_deferred_modes(self) -> None:
         base = dict(
             action="compute",
-            backend="numpy",
+            device="cpu",
             experiment="neutron",
             trajectory_read_mode="cache",
             atom_types=["H"],
@@ -123,7 +124,7 @@ class DSFTypeMappingTests(unittest.TestCase):
             prim_unitcell=np.eye(3),
         )
         for name, value, message in (
-            ("backend", "cupy", "backend = numpy only"),
+            ("device", "wrong", "device must be cpu or gpu"),
             ("experiment", "xray", "experiment = neutron or number only"),
             (
                 "trajectory_read_mode",
@@ -248,9 +249,7 @@ class DSFIntegrationTests(unittest.TestCase):
             ".dsf_coherent_sem",
             ".dsf_incoherent_sem",
             ".dsf_THz",
-            ".dsf_meV",
-            ".dsf_Qcart",
-            ".dsf_Qfrac",
+            ".dsf_Qaxis",
         )
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -266,16 +265,17 @@ class DSFIntegrationTests(unittest.TestCase):
                 self.assertTrue(Path(str(output) + suffix).is_file(), suffix)
             header = Path(str(output) + ".dsf").read_text(
                 encoding="utf-8"
-            ).splitlines()[0]
-            self.assertIn("pynamic-compatible arbitrary units", header)
+            ).splitlines()[:2]
+            self.assertIn("[legacy arbitrary units]", header[0])
+            self.assertIn("Rows: frequency (.dsf_THz); columns: Q (.dsf_Qaxis)", header[1])
             np.testing.assert_allclose(
                 np.loadtxt(str(output) + ".dsf"),
-                result["sqw"],
+                result["sqw"].T,
                 atol=1.0e-15,
             )
             np.testing.assert_allclose(
-                np.loadtxt(str(output) + ".dsf_meV"),
-                result["energy_mev"],
+                np.loadtxt(str(output) + ".dsf_THz"),
+                result["freq_thz"],
                 atol=1.0e-15,
             )
 

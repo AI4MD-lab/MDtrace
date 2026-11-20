@@ -23,6 +23,8 @@ Trace the physics inside your MD trajectory.
 import sys
 import os
 
+from pySED.console import print_detail, print_section
+
 from mdtrace import __version__
 from mdtrace.parser import read_input
 from mdtrace.pipeline import run as run_pipeline
@@ -36,18 +38,15 @@ _LOGO_LINES = (
     r"|_|  |_| |____/    |_|   |_| \_\ /_/   \_\  \____| |_____|",
 )
 
-_BANNER_INDENT = "  "
-_BANNER_WIDTH = max(len(line) for line in _LOGO_LINES)
+_BANNER_INDENT = "    "
+_FRAME_WIDTH = 72
+_INNER_WIDTH = _FRAME_WIDTH - 2
+_LOGO_INDENT = " " * ((_INNER_WIDTH - max(map(len, _LOGO_LINES))) // 2)
 
 
-def _center_banner_line(text):
-    """Center one line within the logo block without trailing whitespace."""
-    return f"{_BANNER_INDENT}{text:^{_BANNER_WIDTH}}".rstrip()
-
-
-LOGO = "\n".join(f"{_BANNER_INDENT}{line}" for line in _LOGO_LINES)
+LOGO = "\n".join(f"{_LOGO_INDENT}{line}" for line in _LOGO_LINES)
 TAGLINE = "\n".join(
-    _center_banner_line(line)
+    line.center(_INNER_WIDTH).rstrip()
     for line in (
         f"Molecular Dynamics Trace   v{__version__}",
         "trace the physics inside your MD trajectory",
@@ -57,25 +56,24 @@ TAGLINE = "\n".join(
 
 
 def _print_banner():
-    print(f"\n{LOGO}\n\n{TAGLINE}\n")
+    border = _BANNER_INDENT + "*" * _FRAME_WIDTH
+    rows = ("", *LOGO.splitlines(), "", *TAGLINE.splitlines(), "")
+    print(f"\n{border}")
+    for row in rows:
+        print(f"{_BANNER_INDENT}*{row:<{_INNER_WIDTH}}*")
+    print(f"{border}\n")
 
 
 def _print_run_summary(input_file, params):
     """Print one aligned panel describing the task about to run."""
 
-    backend = "NumPy (serial DSF)" if params.method == "dsf" else "not implemented"
-
-    border = f"{_BANNER_INDENT}{'=' * _BANNER_WIDTH}"
-    divider = f"{_BANNER_INDENT}{'-' * _BANNER_WIDTH}"
-    print(border)
-    print(f"{_BANNER_INDENT}🚀 Starting MDtrace task")
-    print(divider)
-    print(f"{_BANNER_INDENT}Input   : {input_file}")
-    print(f"{_BANNER_INDENT}Method  : {params.method.upper()}")
-    print(f"{_BANNER_INDENT}Action  : {params.action}")
-    print(f"{_BANNER_INDENT}Backend : {backend}")
-    print(f"{_BANNER_INDENT}Output  : {params.out_files_name}")
-    print(f"{border}\n")
+    print_section("Starting MDtrace task", "🚀")
+    print_detail("Input", input_file)
+    print_detail("Method", params.method.upper())
+    print_detail("Action", params.action)
+    if params.action != "plot":
+        print_detail("Device", params.device.upper() if params.method == "dsf" else "not implemented")
+    print_detail("Output prefix", params.out_files_name)
 
 
 def _show_help():
@@ -96,8 +94,16 @@ CONTROL:
     method = dsf           # default analysis method
     action = thinking      # compute changed/missing DSF data, then plot
     action = compute       # always recompute DSF numerical output
-    action = plot          # plot an existing .dsf.npz archive
-    backend = numpy        # serial CPU DSF; GPU DSF is not implemented
+    action = plot          # plot existing DSF text files
+    device = cpu           # default, parallel over Q vectors
+    device = gpu           # one CUDA GPU with CuPy
+    max_cores = 4          # default CPU process limit; 1 selects serial DSF
+    trajectory_prefetch = 1 # default: read the next small batch in advance
+
+DENSITY AND CURRENTS:
+    density_weighting = equal # default: each atom has weight 1; neutron for scattering
+    dsf_currents = 1          # add longitudinal and transverse particle-current spectra
+    current_weighting = equal # default and currently the only current weighting
 
 TRAJECTORY:
     GPUMD XYZ, LAMMPS custom dumps, and compatible NetCDF are supported.

@@ -20,6 +20,7 @@ from mdtrace.dsf.results import load_spectra, save_dsf
 from mdtrace.dsf.scattering import neutron_weights
 from mdtrace.dsf.spectra import PLANCK_MEV_PS, mean_and_sem
 from mdtrace.dsf.qpoints import average_q_groups, sampling_diagnostics
+from mdtrace.parameters import get_density_weighting
 
 
 def _blocks(result):
@@ -38,6 +39,8 @@ def _summarize(result, blocks, operation):
         result["qresolved__" + name], result["qresolved__" + name + "_sem"] = mean_and_sem(values)
         grouped = [average_q_groups(block, result) for block in values]
         result[name], result[name + "_sem"] = mean_and_sem(grouped)
+    if "total_current" in result:
+        result["total_current"] = result["longitudinal_current"] + result["transverse_current"]
     result["metadata"]["spectrum_names"] = list(blocks)
     result["metadata"].setdefault("postprocessing", []).append(operation)
     return result
@@ -46,7 +49,7 @@ def _summarize(result, blocks, operation):
 def average_shells(result, edges, *, weights=None):
     """Re-bin stored vectors, without generating/interpolating new directions.
 
-    Edges are in rad/Angstrom. Intervals are left-closed, right-open except
+    Edges are in Å⁻¹. Intervals are left-closed, right-open except
     for the last interval. Q=0 is excluded. Weights describe the desired
     average of the retained vectors; they cannot recover unsampled vectors.
     """
@@ -72,39 +75,48 @@ def average_shells(result, edges, *, weights=None):
     out.update(q_cart=q[selected], q_box=result["q_box"][selected],
                q_frac=result["q_frac"][selected] if result["q_frac"].size else result["q_frac"],
                q_weights=weights, q_group=groups, q_counts=counts, q_available_counts=counts.copy(),
+               q_sampling_fraction=np.ones(len(counts)),
                q_axis=np.bincount(groups, weights=weights * norms) / totals,
                q_shell_intervals=np.c_[edges[occupied], edges[occupied + 1]],
-               q_mode="spherical", q_axis_label="Q magnitude (rad/Angstrom)",
-               q_path_ticks=np.empty(0), q_path_labels=[])
+               q_mode="spherical", q_axis_label="Q magnitude (Å⁻¹)",
+               q_path_ticks=np.empty(0), q_path_labels=[],
+               q_available_total=int(counts.sum()), q_available_shells=len(counts),
+               q_budget_mode="retained")
     out.update(sampling_diagnostics(out["q_cart"], groups, len(counts), weights))
     if np.any(out["q_coverage_poor"]):
         warnings.warn("rebinned Q shells have sparse or anisotropic directional coverage; inspect Q diagnostics",
                       RuntimeWarning, stacklevel=2)
     out["metadata"].update(q_mode="spherical", q_axis_label=out["q_axis_label"],
-                           q_path_labels=[], q_population_scope="retained vectors only, not all allowed box vectors")
+                           q_path_labels=[], q_population_scope="retained vectors only, not all allowed box vectors",
+                           q_available_total=out["q_available_total"],
+                           q_available_shells=out["q_available_shells"], q_budget_mode="retained")
     return _summarize(out, {name: values[:, selected] for name, values in blocks.items()},
                       {"operation": "average_shells", "edges_rad_per_A": edges.tolist(),
                        "weighting": "positive per-vector weights saved as q_weights",
                        "population": "retained vectors; changing shells does not undo original subsampling"})
 
 
-def reweight_scattering(result, *, experiment="neutron", coherent=None, incoherent=None):
+def reweight_scattering(result, *, density_weighting=None, experiment=None, coherent=None, incoherent=None):
     """Reweight unmodified trajectories using species-resolved raw spectra.
 
     Custom mappings supply complex lengths in fm, not cross sections. Changing
     labels/weights changes scattering contrast only, not isotope masses in MD.
-    Currents remain number weighted. For number spectra custom weights are invalid.
+    Currents remain equally weighted. The legacy experiment keyword is accepted.
     """
 
+    if density_weighting is None and experiment is None:
+        density_weighting = "neutron"
+    weighting = get_density_weighting(SimpleNamespace(
+        density_weighting=density_weighting, experiment=experiment))
     blocks = _blocks(result)
     labels = np.asarray(result["metadata"]["species_labels"])
     if "pair_density" not in blocks or not len(labels):
         raise ValueError("reweighting requires dsf_partials = 1 at computation")
-    if experiment == "number":
+    if weighting == "equal":
         if coherent is not None or incoherent is not None:
-            raise ValueError("custom scattering lengths require experiment='neutron'")
+            raise ValueError("custom scattering lengths require density_weighting='neutron'")
         b, inc_sq = np.ones(len(labels)), np.zeros(len(labels))
-    elif experiment == "neutron":
+    else:
         if coherent is None and incoherent is None:
             b, inc_sq = neutron_weights(labels)
         elif coherent is None or incoherent is None:
@@ -114,14 +126,15 @@ def reweight_scattering(result, *, experiment="neutron", coherent=None, incohere
                 raise ValueError("custom mappings must cover exactly the stored species labels")
             b = np.array([coherent[label] for label in labels], dtype=complex)
             inc_sq = abs(np.array([incoherent[label] for label in labels], dtype=complex))**2
-    else:
-        raise ValueError("experiment must be number or neutron")
+    experiment = "number" if weighting == "equal" else "neutron"
     blocks.update(combine_partials(blocks, result["metadata"]["pair_indices"], b, inc_sq))
     out = _summarize(result, blocks, {"operation": "reweight_scattering", "experiment": experiment,
                      "coherent_fm": [[float(x.real), float(x.imag)] for x in b],
                      "incoherent_squared_fm2": inc_sq.tolist()})
     meta = out["metadata"]
+    meta["density_weighting"] = weighting
     meta["experiment"] = experiment
+    meta["current_weighting"] = "equal"
     if meta["normalization"] == "density":
         unit = "meV" if meta.get("spectral_density_axis") == "energy_mev" else "THz"
         meta["intensity_unit"] = ("fm^2/" if experiment == "neutron" else "1/") + unit
@@ -186,19 +199,21 @@ def to_energy_density(result):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("archive")
+    parser.add_argument("prefix", help="input text result prefix")
     parser.add_argument("--output", required=True, help="new output prefix")
-    parser.add_argument("--q-edges", type=float, nargs="+")
-    parser.add_argument("--experiment", choices=("number", "neutron"))
+    parser.add_argument("--q-edges", type=float, nargs="+", help="Q shell boundaries in 1/Å")
+    weighting = parser.add_mutually_exclusive_group()
+    weighting.add_argument("--density-weighting", choices=("equal", "neutron"))
+    weighting.add_argument("--experiment", choices=("number", "neutron"), help=argparse.SUPPRESS)
     parser.add_argument("--resolution-fwhm-mev", type=float)
     parser.add_argument("--resolution-kind", choices=("gaussian", "lorentzian"), default="gaussian")
     parser.add_argument("--per-mev", action="store_true")
     args = parser.parse_args(argv)
-    if Path(args.archive).resolve() == Path(args.output + ".dsf.npz").resolve():
-        parser.error("use a different output prefix to preserve the input archive")
-    result = load_spectra(args.archive)
-    if args.experiment:
-        result = reweight_scattering(result, experiment=args.experiment)
+    if Path(args.prefix).resolve() == Path(args.output).resolve():
+        parser.error("use a different output prefix to preserve the input text files")
+    result = load_spectra(args.prefix)
+    if args.density_weighting is not None or args.experiment is not None:
+        result = reweight_scattering(result, density_weighting=args.density_weighting, experiment=args.experiment)
     if args.q_edges is not None:
         result = average_shells(result, args.q_edges)
     if args.resolution_fwhm_mev is not None:

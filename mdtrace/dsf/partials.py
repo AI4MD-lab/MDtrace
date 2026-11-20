@@ -13,7 +13,7 @@ def species_layout(labels):
     return species, indices, pairs
 
 
-def combine_partials(spectra, pairs, coherent, incoherent_sq):
+def combine_partials(spectra, pairs, coherent, incoherent_sq, *, xp=np):
     """Return weighted density contributions and number-current contributions.
 
     Raw pairs store A_a * conj(A_b), including their imaginary parts. The
@@ -22,11 +22,11 @@ def combine_partials(spectra, pairs, coherent, incoherent_sq):
     No concentration factors are needed: all raw spectra use total atom count.
     """
     pairs = np.asarray(pairs, dtype=int)
-    coherent = np.asarray(coherent, dtype=complex)
-    incoherent_sq = np.asarray(incoherent_sq, dtype=float)
+    coherent = xp.asarray(coherent, dtype=complex)
+    incoherent_sq = xp.asarray(incoherent_sq, dtype=float)
     if (coherent.ndim != 1 or incoherent_sq.shape != coherent.shape
-            or not np.isfinite(coherent).all() or not np.isfinite(incoherent_sq).all()
-            or np.any(incoherent_sq < 0)):
+            or not xp.isfinite(coherent).all() or not xp.isfinite(incoherent_sq).all()
+            or xp.any(incoherent_sq < 0)):
         raise ValueError("partial weights must be finite; incoherent squared weights must be nonnegative")
     expected = np.array(list(combinations_with_replacement(range(len(coherent)), 2)))
     if not np.array_equal(pairs, expected):
@@ -35,7 +35,7 @@ def combine_partials(spectra, pairs, coherent, incoherent_sq):
             or spectra["species_self"].shape[-2] != len(coherent)):
         raise ValueError("partial spectrum dimensions do not match species and pair weights")
     a, b = pairs.T
-    factors = np.where(a == b, 1., 2.)
+    factors = xp.asarray(np.where(a == b, 1., 2.))
     pair_weights = factors * coherent[a] * coherent[b].conj()
     result = {
         "partial_coherent_sqw": (spectra["pair_density"] * pair_weights[:, None]).real,

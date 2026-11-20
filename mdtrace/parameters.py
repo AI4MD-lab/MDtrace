@@ -98,7 +98,7 @@ common_params = {
     # Control
     "action": Parameter("thinking", read_lower_text),
     "method": Parameter("dsf", read_lower_text),
-    "backend": Parameter("numpy", read_lower_text),
+    "device": Parameter("cpu", read_lower_text),
 
     # Trajectory and output
     "trajectory_file": Parameter("dump.xyz", read_text),
@@ -125,7 +125,8 @@ common_params = {
 # ==================== DSF parameters ====================
 
 dsf_params = {
-    "experiment": Parameter("neutron", read_lower_text),
+    "density_weighting": Parameter("equal", read_lower_text),
+    "current_weighting": Parameter("equal", read_lower_text),
     "atom_types": Parameter(None, read_text_list),
     "dsf_qpoints": Parameter(None, read_q_path),
     "dsf_q_mode": Parameter("explicit", read_lower_text),
@@ -135,15 +136,19 @@ dsf_params = {
     "dsf_q_min": Parameter(0.0, read_float),
     "dsf_q_max": Parameter(None, read_optional_float),
     "dsf_q_bin_width": Parameter(0.1, read_float),
-    "dsf_max_points_per_shell": Parameter(100, read_int),
+    "dsf_max_points": Parameter(5000, read_int),
+    "dsf_max_points_per_shell": Parameter(None, read_int),  # Legacy input files.
     "dsf_seed": Parameter(0, read_int),
     "dsf_cell": Parameter(None, read_matrix3),
     "dsf_currents": Parameter(False, read_bool),
+    "dsf_output_components": Parameter(False, read_bool),
+    "dsf_output_sem": Parameter(False, read_bool),
     "dsf_save_q_resolved": Parameter(False, read_bool),
     "dsf_partials": Parameter(False, read_bool),
     "dsf_normalization": Parameter("density", read_lower_text),
-    "dsf_window": Parameter("none", read_lower_text),
     "dsf_subtract_mean": Parameter(False, read_bool),
+    "dsf_plot_density": Parameter(True, read_bool),
+    "dsf_plot_currents": Parameter(True, read_bool),
     "dsf_plot_frequency_max": Parameter(None, read_optional_float),
     "dsf_plot_energy_min": Parameter(None, read_optional_float),
     "dsf_plot_energy_max": Parameter(None, read_optional_float),
@@ -157,20 +162,19 @@ dsf_params = {
 # EELS-specific parameters will be added with the calculation method.
 eels_params = {}
 
-supported_backends = {"numpy"}
-
-
 # ==================== Validation ====================
+
+def _validate_device(params):
+    if hasattr(params, "backend"):
+        raise ValueError("unknown parameter 'backend'. Use device = cpu or gpu")
+    if getattr(params, "device", "cpu") not in {"cpu", "gpu"}:
+        raise ValueError("device must be cpu or gpu")
+
 
 def validate_common(params):
     if params.action not in {"thinking", "compute", "plot"}:
         raise ValueError("action must be thinking, compute, or plot; SED fitting is provided by pySED")
-    if params.backend not in supported_backends:
-        supported = ", ".join(sorted(supported_backends))
-        raise ValueError(
-            f"backend '{params.backend}' is not available; "
-            f"supported backends: {supported}"
-        )
+    _validate_device(params)
     if params.lammps_unit not in {"metal", "real"}:
         raise ValueError("lammps_unit must be 'metal' or 'real'")
     if params.trajectory_read_mode not in {"cache", "direct"}:
@@ -202,18 +206,35 @@ def validate_common(params):
         raise ValueError("netcdf_batch_size must be positive")
 
 
+def get_density_weighting(params):
+    """Resolve the public weighting name, including legacy Python callers."""
+    weighting = getattr(params, "density_weighting", None)
+    experiment = getattr(params, "experiment", None)
+    if experiment is not None:
+        if weighting is not None:
+            raise ValueError("specify density_weighting or legacy experiment, not both")
+        if experiment not in {"number", "neutron"}:
+            raise ValueError("legacy experiment = neutron or number only; use density_weighting = equal or neutron")
+        weighting = "equal" if experiment == "number" else "neutron"
+    if weighting is None:
+        weighting = dsf_params["density_weighting"].default
+    if weighting not in {"equal", "neutron"}:
+        raise ValueError("density_weighting must be equal or neutron")
+    return weighting
+
+
 def validate_dsf(params, *, compute=False):
     from mdtrace.dsf.qpoints import as_qpoints, validate_cell
 
     value = lambda name: getattr(params, name, dsf_params[name].default)
+    weighting = get_density_weighting(params)
+    if value("current_weighting") != "equal":
+        raise ValueError("current_weighting currently supports equal only (particle current)")
     if compute or getattr(params, "action", "compute") in {"thinking", "compute"}:
-        if getattr(params, "backend", "numpy") != "numpy":
-            raise ValueError("DSF supports backend = numpy only")
-        if value("experiment") not in {"neutron", "number"}:
-            raise ValueError("DSF supports experiment = neutron or number only")
+        _validate_device(params)
         if getattr(params, "trajectory_read_mode", "cache") != "cache":
             raise ValueError("DSF requires trajectory_read_mode = cache")
-        if value("experiment") == "neutron" and value("atom_types") is None:
+        if weighting == "neutron" and value("atom_types") is None:
             raise ValueError("atom_types is required for neutron DSF computation")
         mode = value("dsf_q_mode")
         if mode not in {"explicit", "path", "spherical"}:
@@ -244,8 +265,11 @@ def validate_dsf(params, *, compute=False):
             low, high, width = value("dsf_q_min"), value("dsf_q_max"), value("dsf_q_bin_width")
             if high is None or not np.isfinite([low, high, width]).all() or not (0 <= low < high and width > 0):
                 raise ValueError("spherical sampling requires 0 <= dsf_q_min < dsf_q_max and positive dsf_q_bin_width")
-            cap = value("dsf_max_points_per_shell")
-            if cap < 0 or int(cap) != cap or cap % 2:
+            cap = value("dsf_max_points")
+            if not np.isfinite(cap) or cap < 0 or int(cap) != cap or cap == 1:
+                raise ValueError("dsf_max_points must be 0 (all) or an integer of at least 2")
+            legacy_cap = value("dsf_max_points_per_shell")
+            if legacy_cap is not None and (legacy_cap < 0 or int(legacy_cap) != legacy_cap or legacy_cap % 2):
                 raise ValueError("dsf_max_points_per_shell must be 0 (all) or a positive even integer")
             seed = value("dsf_seed")
             if seed < 0 or int(seed) != seed:
@@ -256,8 +280,6 @@ def validate_dsf(params, *, compute=False):
             raise ValueError("dsf_q_path is only used with dsf_q_mode = path")
         if value("dsf_normalization") not in {"density", "legacy"}:
             raise ValueError("dsf_normalization must be density or legacy")
-        if value("dsf_window") not in {"none", "hann"}:
-            raise ValueError("dsf_window must be none or hann")
     if value("dsf_plot_scale") not in {"linear", "log"}:
         raise ValueError("dsf_plot_scale must be linear or log")
     cutoff = value("dsf_plot_frequency_max")

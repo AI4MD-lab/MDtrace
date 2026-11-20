@@ -20,7 +20,7 @@ Development: crystal and amorphous DSF
 
 The current checkout adds density DSF and longitudinal/transverse particle
 currents, fixed-cell periodic Q validation, crystal paths, isotropic shell
-averaging, normalized frequency densities, and archive-based plotting.
+averaging, normalized frequency densities, and text-based plotting.
 It also adds undefined (NaN) single-block SEMs, shell coverage diagnostics,
 optional per-Q time blocks and complex element-pair spectra, and independent
 rebinning/neutron reweighting. Gaussian/Lorentzian resolution convolution,
@@ -30,6 +30,13 @@ polarization conversions.
 The original neutron data table is preserved. See :doc:`dsf_workflow` for
 supported inputs, examples and validation boundaries. This entry does not change
 the published 1.1.0 release or its version tag.
+
+Density weights now use ``density_weighting = equal`` or ``neutron``. The
+default changes from neutron weighting to equal atom weights; neutron analyses
+must select ``neutron`` explicitly. ``current_weighting = equal`` describes
+the existing particle currents and is currently the only current choice.
+Explicit legacy ``experiment = number/neutron`` inputs remain accepted, and
+renaming that setting alone does not invalidate matching saved text results.
 
 Version 1.1.0
 -------------

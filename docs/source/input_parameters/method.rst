@@ -8,9 +8,10 @@ method
    method = sed
 
 **Meaning**
-   Selects the reciprocal-space observable. The supported MDtrace 1.1.0 public
-   workflow is ``sed``. DSF and EELS are reserved roadmap methods and are not
-   supported release workflows.
+   Selects the reciprocal-space observable. ``sed`` provides the published
+   MDtrace 1.1.0 SED workflow. The development checkout also supports ``dsf``
+   for density and longitudinal/transverse current spectra; see
+   :doc:`../dsf_workflow`. EELS remains a planned method.
 
 **Default**
    ``sed``.

@@ -4,8 +4,11 @@ Code architecture and reading guide
 MDtrace currently calculates DSF and particle-current spectra. The package root
 owns the command line, input configuration and workflow. The ``io`` package
 delegates trajectory reading to pySED; ``dsf`` owns the physics and its saved
-results. SED is provided separately by pySED. MDtrace requires the public I/O
-interface introduced in pysed-phonon 3.1.
+results. SED is provided separately by pySED. MDtrace requires
+``pysed-phonon>=3.0`` and imports the readers from its I/O submodules.
+With pySED 3.0, GPUMD text conversion includes an extra header scan to retain
+per-frame cells and check property layouts. Native NetCDF and validated cache
+reuse need no text scan. Newer pySED versions perform these checks during parsing.
 
 Module responsibilities
 -----------------------
@@ -23,13 +26,15 @@ Module responsibilities
      dsf/
        dsf.py             Trajectory checks, atom alignment, block calculation
        spectra.py         FFT periodograms, normalization and block statistics
+       parallel.py        Persistent Q workers, shared blocks and memory limits
+       streaming.py       Bounded frame batches, shared signals and one-batch prefetch
        partials.py        Species pairs and reconstruction of weighted spectra
        scattering.py      Coherent/incoherent neutron weights and isotope aliases
        neutron_scattering_lengths.py
                           Reviewed scattering data
        qpoints.py         Explicit/path/spherical sampling and shell diagnostics
        commensurate.py    Exact reciprocal-path geometry
-       results.py         Result metadata, archive checks, loading and writing
+       results.py         Result metadata, text checks, loading and writing
        postprocess.py     Reweighting, shell averaging and resolution convolution
        plot.py            Plot saved spectra
      eels/                Placeholder only; no EELS implementation
@@ -41,26 +46,40 @@ Follow a calculation
    validation come from ``parameters``.
 2. ``pipeline.step_prepare_trajectory`` selects a native NetCDF trajectory or
    converts text through ``io.prepare.prepare_trajectory``, which delegates to
-   ``pySED.io.prepare_trajectory(validate_headers=True)``. The optimized pySED
-   parser and chunked/compressed writer are the only conversion implementation.
+   ``pySED.io.prepare.prepare_trajectory`` (with header validation where
+   supported). The optimized pySED parser and chunked/compressed writer remain
+   the conversion implementation; MDtrace supplies the 3.0 header checks.
 3. ``dsf.compute_dsf`` reads the trajectory, checks sampling/cells/atom IDs,
    builds allowed Q vectors and prepares scattering weights.
-4. ``spectra.block_spectra`` computes density, self, current and optional partial
-   spectra for one block. ``qpoints.average_q_groups`` averages directions;
+4. ``parallel.DSFExecutor`` distributes Q ranges within a time block, sharing
+   positions/velocities and reusing the process pool across blocks. It reuses
+   pySED's CPU-memory query and Q-batching helpers; its memory estimate is DSF-specific.
+   Ordinary density/current spectra use ``streaming.stream_blocks`` to fill
+   complete time signals from small frame batches, with pySED's ``prefetch_one``.
+   Atom-wise spectra retain ``spectra.block_spectra``. Both paths use the same
+   time-transform, normalization and current-projection helpers in ``spectra``. ``qpoints.average_q_groups`` averages directions;
    ``spectra.mean_and_sem`` combines block estimates.
+   With ``device = gpu``, ``gpu.GPUBackend`` instead batches density/current
+   projection and complete time FFTs on one GPU. Atom-wise spectra reuse
+   ``block_spectra`` with the CuPy array module; partial reconstruction shares
+   the same formulas. Only completed spectra return to NumPy for averaging/output,
+   unless limited device memory requires host storage of the reduced time signals.
 5. The calculator returns arrays and metadata. The pipeline separately calls
-   ``results.save_dsf`` to write tables, metadata and the ``.dsf.npz`` archive.
+   ``results.save_dsf`` to write spectrum/axis text files with metadata in the Q-axis header.
 
 Numerical kernels do not import the command line, trajectory readers or plotter.
 The calculation does not write analysis results itself. Output filenames and
-archive metadata belong to ``results``. Settings/source checks for ``thinking``
+text metadata belong to ``results``. Settings/source checks for ``thinking``
 also live there; the pipeline only decides which step to execute.
 
 Read and post-process results
 -----------------------------
 
-``results.load_spectra`` is the shared archive reader for plotting and
-post-processing. Neither requires the original trajectory or imports the
+``results.load_spectra`` is the shared text reader for plotting and
+post-processing. With ``for_plot=True`` it loads only displayed spectra and
+the Q information needed to draw them; missing optional SEM, self-spectrum or
+block files do not prevent plotting. Full loading retains post-processing data.
+Neither use requires the original trajectory or imports the
 trajectory calculator. Reweighting calls ``scattering.neutron_weights``;
 statistical aggregation calls ``spectra.mean_and_sem``. The reviewed scattering
 table is shared, without duplicating values.
@@ -74,7 +93,7 @@ Public entry points are:
 
    result = compute_dsf(params)
    save_dsf(result, params)
-   saved = load_spectra(params.out_files_name + ".dsf.npz")
+   saved = load_spectra(params.out_files_name)
 
 The package initializer loads these functions on demand. Importing only a
 numerical or result module does not load trajectory computation or Matplotlib.

@@ -56,17 +56,17 @@ class BZPathHelper:
 
     @property
     def primitive(self):
-        """Primitive lattice vectors as rows, in Angstrom."""
+        """Primitive lattice vectors as rows, in Å."""
         return self._primitive_cell
 
     @property
     def supercell(self):
-        """Supercell lattice vectors as rows, in Angstrom."""
+        """Supercell lattice vectors as rows, in Å."""
         return self._supercell_cell
 
     @property
     def reciprocal_primitive(self):
-        """Primitive reciprocal vectors as rows, in rad/Angstrom."""
+        """Primitive reciprocal vectors as rows, in Å⁻¹."""
         return 2 * np.pi * np.linalg.inv(self.primitive.T)
 
     def _compute_P_matrix(self):
@@ -118,7 +118,7 @@ class BZPathHelper:
         Returns
         -------
         q_cart : ndarray, shape (N, 3)
-            Cartesian q-points in rad/Angstrom, ordered from start to end.
+            Cartesian q-points in Å⁻¹, ordered from start to end.
         fractions : ndarray, shape (N,)
             Positions in [0, 1] along the normalized segment. Empty paths
             return shapes (0, 3) and (0,). A zero-length segment returns its

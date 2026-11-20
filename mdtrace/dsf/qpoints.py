@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Periodic Q sampling for crystals and isotropic disordered systems.
 
-Cells contain lattice vectors as rows, in Angstrom. Cartesian Q includes 2*pi.
+Cells contain lattice vectors as rows, in Å. Cartesian Q includes 2*pi.
 The crystal path uses MDtrace's existing commensurate-path solver. Spherical
 sampling enumerates the simulation-box reciprocal lattice, not a crystal BZ.
 """
@@ -40,6 +40,22 @@ def check_commensurate(points, cell, tolerance=1e-5):
         )
 
 
+def _reciprocal_points(cell, q_min, q_max):
+    """Yield one vector from each allowed +/- pair in bounded chunks."""
+    bounds = np.floor(q_max * np.linalg.norm(cell, axis=1) / (2 * np.pi) + 1e-10).astype(int)
+    reciprocal = 2 * np.pi * np.linalg.inv(cell).T
+    lattice = product(*(range(-int(n), int(n) + 1) for n in bounds))
+    while chunk := list(islice(lattice, 32768)):
+        integers = np.asarray(chunk)
+        half = ((integers[:, 0] > 0)
+                | ((integers[:, 0] == 0) & (integers[:, 1] > 0))
+                | ((integers[:, :2] == 0).all(axis=1) & (integers[:, 2] > 0)))
+        points = integers[half] @ reciprocal
+        norms = np.linalg.norm(points, axis=1)
+        keep = (norms >= q_min - 1e-10) & (norms <= q_max + 1e-10)
+        yield points[keep], norms[keep]
+
+
 def _spherical_points(cell, q_min, q_max, width, max_per_shell, seed):
     """Sample reciprocal points in +/- pairs with an optional shell-wise cap.
 
@@ -48,22 +64,10 @@ def _spherical_points(cell, q_min, q_max, width, max_per_shell, seed):
     a preferred sign of Q. Only a bounded chunk and the selected points are
     held in memory when a cap is used.
     """
-    bounds = np.floor(q_max * np.linalg.norm(cell, axis=1) / (2 * np.pi) + 1e-10).astype(int)
-    reciprocal = 2 * np.pi * np.linalg.inv(cell).T
-    lattice = product(*(range(-int(n), int(n) + 1) for n in bounds))
     rng = np.random.default_rng(seed)
     selected = {}
     available = {}
-    while chunk := list(islice(lattice, 32768)):
-        integers = np.asarray(chunk)
-        # One representative from each +/- pair; exclude Q=0.
-        half = ((integers[:, 0] > 0)
-                | ((integers[:, 0] == 0) & (integers[:, 1] > 0))
-                | ((integers[:, :2] == 0).all(axis=1) & (integers[:, 2] > 0)))
-        points = integers[half] @ reciprocal
-        norms = np.linalg.norm(points, axis=1)
-        keep = (norms >= q_min - 1e-10) & (norms <= q_max + 1e-10)
-        points, norms = points[keep], norms[keep]
+    for points, norms in _reciprocal_points(cell, q_min, q_max):
         bins = np.minimum(np.floor(norms / width + 1e-10).astype(int),
                           int(np.ceil(q_max / width)) - 1)
         priorities = rng.random(len(points))
@@ -80,7 +84,8 @@ def _spherical_points(cell, q_min, q_max, width, max_per_shell, seed):
     if not selected:
         raise ValueError("no nonzero reciprocal-box Q points fall inside dsf_q_min/dsf_q_max")
     points, groups, counts, population, intervals = [], [], [], [], []
-    for group, shell in enumerate(sorted(selected)):
+    shell_ids = sorted(selected)
+    for group, shell in enumerate(shell_ids):
         positive = selected[shell][0]
         pair = np.concatenate((positive, -positive))
         points.append(pair)
@@ -89,7 +94,53 @@ def _spherical_points(cell, q_min, q_max, width, max_per_shell, seed):
         population.append(available[shell])
         intervals.append([max(q_min, shell * width), min(q_max, (shell + 1) * width)])
     return (np.concatenate(points), np.asarray(groups), np.asarray(counts),
-            np.asarray(population), np.asarray(intervals))
+            np.asarray(population), np.asarray(intervals), shell_ids)
+
+
+def _spherical_points_total(cell, q_min, q_max, width, max_points, seed):
+    """Select a radial-balanced total budget while retaining complete +/- pairs.
+
+    A pair receives a uniform random priority multiplied by |Q|^2. Keeping
+    the smallest priorities retains all pairs below the final cutoff radius
+    and progressively thins dense high-Q regions. At a fixed cutoff, the
+    retention probability decreases as 1/|Q|^2, balancing the 3D radial point
+    density. Selection precedes binning, so changing shell width leaves the
+    sampled vectors unchanged. Only a chunk and the selected pairs are kept.
+    """
+    rng = np.random.default_rng(seed)
+    limit = max_points // 2
+    selected = np.empty((0, 3))
+    priorities = np.empty(0)
+    chunks, available = [], {}
+    for points, norms in _reciprocal_points(cell, q_min, q_max):
+        bins = np.minimum(np.floor(norms / width + 1e-10).astype(int),
+                          int(np.ceil(q_max / width)) - 1)
+        shells, counts = np.unique(bins, return_counts=True)
+        for shell, count in zip(shells, counts):
+            available[shell] = available.get(shell, 0) + 2 * int(count)
+        if max_points:
+            selected = np.concatenate((selected, points))
+            priorities = np.r_[priorities, rng.random(len(points)) * norms**2]
+            if len(selected) > limit:
+                keep = np.argpartition(priorities, limit - 1)[:limit]
+                selected, priorities = selected[keep], priorities[keep]
+        else:
+            chunks.append(points)
+    if not available:
+        raise ValueError("no nonzero reciprocal-box Q points fall inside dsf_q_min/dsf_q_max")
+    if not max_points:
+        selected = np.concatenate(chunks)
+    points = np.concatenate((selected, -selected))
+    bins = np.minimum(np.floor(np.linalg.norm(points, axis=1) / width + 1e-10).astype(int),
+                      int(np.ceil(q_max / width)) - 1)
+    order = np.argsort(bins, kind="stable")
+    points, bins = points[order], bins[order]
+    shells, groups, counts = np.unique(bins, return_inverse=True, return_counts=True)
+    population = np.array([available[shell] for shell in shells])
+    intervals = np.array([[max(q_min, shell * width), min(q_max, (shell + 1) * width)]
+                          for shell in shells])
+    return (points, groups, counts, population, intervals,
+            sum(available.values()), sorted(available))
 
 
 def build_qpoints(params, cell):
@@ -137,15 +188,24 @@ def build_qpoints(params, cell):
                 parts.append(qs)
                 distances.append(ticks[segment] + fractions * lengths[segment])
         points, axis = np.concatenate(parts), np.concatenate(distances)
-        axis_label = "Path distance (rad/Angstrom)"
+        axis_label = "Path distance (Å⁻¹)"
     elif mode == "spherical":
-        points, groups, counts, population, intervals = _spherical_points(
-            cell, getattr(params, "dsf_q_min", 0.0), params.dsf_q_max,
-            getattr(params, "dsf_q_bin_width", 0.1),
-            getattr(params, "dsf_max_points_per_shell", 100), getattr(params, "dsf_seed", 0),
-        )
+        arguments = (cell, getattr(params, "dsf_q_min", 0.0), params.dsf_q_max,
+                     getattr(params, "dsf_q_bin_width", 0.1))
+        legacy_cap = getattr(params, "dsf_max_points_per_shell", None)
+        seed = getattr(params, "dsf_seed", 0)
+        if legacy_cap is None:
+            (points, groups, counts, population, intervals,
+             available_total, available_shell_ids) = _spherical_points_total(
+                *arguments, getattr(params, "dsf_max_points", 5000), seed,
+            )
+        else:
+            points, groups, counts, population, intervals, available_shell_ids = _spherical_points(
+                *arguments, legacy_cap, seed,
+            )
+            available_total = int(population.sum())
         axis = np.bincount(groups, weights=np.linalg.norm(points, axis=1)) / counts
-        axis_label = "Q magnitude (rad/Angstrom)"
+        axis_label = "Q magnitude (Å⁻¹)"
     else:
         raise ValueError("dsf_q_mode must be explicit, path, or spherical")
 
@@ -159,13 +219,34 @@ def build_qpoints(params, cell):
                    if primitive is not None else np.empty((0, 3))),
         "q_box": points @ cell.T / (2 * np.pi),
         "q_group": groups, "q_counts": counts, "q_available_counts": population,
+        "q_sampling_fraction": counts / population,
         "q_axis": axis, "q_axis_label": axis_label,
         "q_path_ticks": ticks, "q_path_labels": list(labels),
         "q_shell_intervals": intervals, "q_mode": mode,
     }
     if mode == "spherical":
+        sampling.update(q_available_total=available_total, q_available_shells=len(available_shell_ids),
+                        q_available_shell_ids=available_shell_ids,
+                        q_budget_mode="total" if legacy_cap is None else "per_shell")
         sampling.update(sampling_diagnostics(points, groups, len(counts)))
     return sampling
+
+
+def coverage_warning(sampling):
+    """Distinguish an incomplete sample from poor coverage of all allowed vectors."""
+    poor = sampling["q_coverage_poor"]
+    capped = sampling["q_counts"] < sampling["q_available_counts"]
+    messages = []
+    if count := int(np.count_nonzero(poor & capped)):
+        limit_name = ("dsf_max_points_per_shell" if sampling.get("q_budget_mode") == "per_shell"
+                      else "dsf_max_points")
+        messages.append(f"{count} Q shell(s) have poor directional coverage in a sampled subset; "
+                        f"increase {limit_name} and reassess before judging the box")
+    if count := int(np.count_nonzero(poor & ~capped)):
+        messages.append(f"{count} Q shell(s) have poor directional coverage even with all allowed "
+                        "box vectors; increasing the sampling cap cannot help; check cell size/shape "
+                        "and shell width")
+    return "; ".join(messages) + ". Inspect counts and directions in the Q sampling summary; coverage is a heuristic, not a convergence test."
 
 
 def average_q_groups(values, sampling):

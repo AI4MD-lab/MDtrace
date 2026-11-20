@@ -1,27 +1,37 @@
-# Crystal Si template. Supply a fixed-cell GPUMD trajectory with positions
-# and velocities. Replace this primitive cell with the cell actually used
-# in the trajectory, in the same Cartesian orientation.
+# PATH: copy this complete file to input.in in your calculation directory.
+# Supply crystal.xyz: a fixed, fully periodic GPUMD trajectory with positions
+# and velocities in the same frames. Run: mdtrace input.in
 method = dsf
+device = cpu  # Use gpu for a CUDA GPU.
+# Compute missing/changed results, then plot the saved text files.
 action = thinking
-experiment = number
+density_weighting = equal  # Each atom has weight 1; neutron uses scattering weights.
+current_weighting = equal  # Particle current; currently the only supported choice.
 trajectory_file = crystal.xyz
+trajectory_read_mode = cache
 out_files_name = crystal_dsf
+# Actual MD timestep in fs and number of MD steps between saved frames.
+# These example values give a saved-frame interval of 10 fs = 0.01 ps.
 time_step = 1
 output_data_stride = 10
+# Four non-overlapping time blocks; more blocks reduce frequency resolution.
 num_blocks = 4
 
+# Example Si primitive lattice: three ROW vectors in Å.
+# Replace it and the path below for your crystal, using the trajectory's
+# Cartesian orientation. The simulation cell must be an integer supercell.
 prim_unitcell = 0 2.7155 2.7155  2.7155 0 2.7155  2.7155 2.7155 0
 dsf_q_mode = path
+# Successive endpoints in fractional primitive reciprocal coordinates.
+# Each group of three numbers is one endpoint; labels are display names only.
 dsf_q_path = 0 0 0  0 1/2 1/2  1/2 1/2 1/2
 dsf_q_path_labels = G X L
+# Currents are undefined at Q=0; their saved entries there are NaN.
+# Density + longitudinal (CL) + transverse (CT) currents; requires velocities.
+# CT sums both transverse polarizations, rather than averaging them.
 dsf_currents = 1
-dsf_save_q_resolved = 1
-dsf_normalization = density
-dsf_window = hann
+# Remove the time mean in each block for vibration spectra.
+# Use 0 if the elastic/quasielastic contribution is needed.
 dsf_subtract_mean = 1
+# Plot limit in THz only; saved spectra keep the full frequency range.
 dsf_plot_frequency_max = 20
-
-# For neutron-weighted density spectra instead, use:
-# experiment = neutron
-# atom_types = Si
-# Particle currents always retain number weights.

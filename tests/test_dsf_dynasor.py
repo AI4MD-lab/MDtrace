@@ -44,7 +44,7 @@ def test_complete_reciprocal_spheres_match_dynasor(cell):
     from dynasor.qpoints import get_spherical_qpoints
 
     ours = build_qpoints(SimpleNamespace(dsf_q_mode="spherical", dsf_q_min=.2,
-                         dsf_q_max=2.21, dsf_q_bin_width=.3, dsf_max_points_per_shell=0), cell)
+                         dsf_q_max=2.21, dsf_q_bin_width=.3, dsf_max_points=0), cell)
     theirs = get_spherical_qpoints(cell, q_min=.2, q_max=2.21)
     assert {tuple(x) for x in np.round(ours["q_cart"], 10)} == {tuple(x) for x in np.round(theirs, 10)}
 

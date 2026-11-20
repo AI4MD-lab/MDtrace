@@ -28,12 +28,14 @@ Trajectory and Q points
 Outputs and statistics
 ----------------------
 
-``action = plot`` requires a complete ``.dsf.npz`` archive. ``thinking`` checks
+``action = plot`` requires complete spectrum, frequency and Q-axis text files. ``thinking`` checks
 the input settings and source signature before reusing numerical results.
 Explicit ``compute`` always recalculates; explicit ``plot`` always redraws.
 
 A single block cannot estimate SEM, so its SEM is NaN. A sparse Q-shell warning
 indicates limited directional coverage, not a calculation failure. Current
 spectra are undefined at Q=0 and contain NaN there. See :doc:`dsf_workflow` for
-normalization and convergence checks. GPU DSF and automatic peak fitting are
-not implemented.
+normalization and convergence checks. ``device = gpu`` requires CuPy and a
+usable CUDA device. GPU frame/Q batches adapt to available memory; atom-wise
+outputs still require a complete atom-wise block to fit device memory.
+Automatic peak fitting is not implemented.

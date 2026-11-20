@@ -21,8 +21,15 @@ kinetic-energy-weighted phonon spectra from molecular-dynamics trajectories.
 It computes and visualizes total or element/direction-resolved spectral energy
 density (SED) and performs independent Lorentzian or velocity-DHO peak fitting.
 
-Dynamic structure factor (DSF) and electron energy-loss spectroscopy (EELS)
-are planned extensions; they are not part of the supported 1.1.0 workflow.
+The development checkout also provides density dynamic structure factors (DSF)
+and longitudinal/transverse particle-current spectra for periodic crystals and
+amorphous systems. See the [DSF workflow](docs/source/dsf_workflow.rst) and
+[input templates](examples/dsf/README.md). This addition is separate from the
+published 1.1.0 SED-only release. EELS remains planned.
+
+Development DSF also supports ``backend = cupy`` for density and longitudinal/
+transverse spectra, neutron weights, self and partial spectra. It uses one CUDA
+GPU with automatic batching and the same normalization/output as the CPU path.
 
 ## Highlights
 
@@ -245,7 +252,7 @@ Q grid, and fitting settings.
 The 1.1.0 release deliberately focuses on a clean SED workflow. Planned work
 includes:
 
-- dynamic structure factor (DSF),
+- further DSF extensions: X-ray weighting and peak analysis,
 - electron energy-loss spectroscopy (EELS),
 - optional mode-projected SED using external eigenvectors.
 

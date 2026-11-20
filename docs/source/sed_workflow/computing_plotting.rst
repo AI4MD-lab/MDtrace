@@ -11,10 +11,10 @@ force numerical calculation with
 
    action  = compute
    method  = sed
-   backend = numpy
+   device = cpu
 
 The NumPy backend is serial when ``max_cores = 1`` and uses persistent worker
-processes when ``max_cores > 1``. ``backend = cupy`` uses one CUDA GPU for the
+processes when ``max_cores > 1``. ``device = gpu`` uses one CUDA GPU for the
 SED kernel; ``max_cores`` does not control that kernel. Plotting and spectral
 fitting remain CPU operations.
 

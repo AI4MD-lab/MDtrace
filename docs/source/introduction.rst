@@ -11,7 +11,7 @@ neutron reweighting, and independent spectral post-processing. See
 :doc:`dsf_workflow` for definitions, units, limitations and validation.
 
 Use a fixed, fully periodic cell and uniformly sampled frames. Velocities are
-needed only for currents. DSF runs on serial NumPy and reads native NetCDF or
+needed only for currents. DSF uses NumPy with optional Q-point multiprocessing and reads native NetCDF or
 text trajectories converted to a NetCDF cache. EELS remains planned.
 
 SED computation, peak fitting and phonon-lifetime output are provided separately

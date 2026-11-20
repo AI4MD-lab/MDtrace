@@ -198,7 +198,7 @@ def test_complex_mixture_through_netcdf_blocks_and_text_output(
     )
     q_frac = np.array([[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
     params = SimpleNamespace(
-        backend="numpy", experiment="neutron", trajectory_path=str(trajectory),
+        device="cpu", experiment="neutron", trajectory_path=str(trajectory),
         dsf_normalization="legacy",
         dsf_qpoints=q_frac.ravel().tolist(), prim_unitcell=np.eye(3),
         atom_types=["3He"] if single_element else ["H", "157Gd", "3He"], num_blocks=2,
@@ -229,18 +229,20 @@ def test_complex_mixture_through_netcdf_blocks_and_text_output(
         assert np.all(result[name] >= 0)
     assert np.max(result["sqw_sem"]) > 0
 
+    params.dsf_output_sem = True
     save_dsf(result, params)
     for suffix, name in ((".dsf", "sqw"), (".dsf_coherent", "coherent_sqw"),
                          (".dsf_incoherent", "incoherent_sqw"),
                          (".dsf_sem", "sqw_sem"), (".dsf_coherent_sem", "coherent_sqw_sem"),
                          (".dsf_incoherent_sem", "incoherent_sqw_sem")):
         output = Path(params.out_files_name + suffix)
-        np.testing.assert_allclose(np.loadtxt(output), result[name], rtol=1e-14, atol=1e-12)
-        assert "complex coherent b; incoherent |b|^2" in output.read_text().splitlines()[0]
+        np.testing.assert_allclose(np.loadtxt(output), result[name].T, rtol=1e-14, atol=1e-12)
+        assert "neutron weights" in output.read_text().splitlines()[0]
 
 
 def _trajectory_params(path):
     return SimpleNamespace(
+        density_weighting="neutron",
         trajectory_path=str(path), dsf_qpoints=[0.4, 0.2, -0.3],
         prim_unitcell=np.eye(3), atom_types=["H"], num_blocks=1,
         dsf_normalization="legacy",

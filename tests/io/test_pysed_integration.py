@@ -7,7 +7,7 @@ import pytest
 from netCDF4 import Dataset
 
 from mdtrace.dsf import compute_dsf
-from mdtrace.io import NetCDFReader, POSITIONS, VELOCITIES
+from mdtrace.io import NetCDFReader, POSITIONS, VELOCITIES, require_current_cache
 from mdtrace.io.prepare import prepare_trajectory
 from tests.io.fixtures import GPUMD_TEXT, LAMMPS_TEXT
 
@@ -22,20 +22,21 @@ def params(path):
 
 @pytest.mark.parametrize('text,name', [(GPUMD_TEXT, 'dump.xyz'), (LAMMPS_TEXT, 'dump.data')])
 def test_shared_reader_preserves_cache_name_units_and_reuse(tmp_path, text, name):
-    from pySED.io import NetCDFReader as PublicReader
+    from pySED.io.netcdf import NetCDFReader as PublicReader
     assert NetCDFReader is PublicReader
     source = tmp_path / name
     source.write_text(text)
     cache, _ = prepare_trajectory(source, storage_dtype='float64', compression_level=1)
     assert cache.name == name + '.mdtrace.nc'
     with NetCDFReader(cache) as reader:
-        reader.require_current_cache(validate_headers=True)
+        require_current_cache(reader)
         assert reader.read(POSITIONS).shape == (2, 2, 3)
         np.testing.assert_allclose(reader.read(VELOCITIES)[0, 0], [100, 200, 300])
     with Dataset(cache) as saved:
         assert saved.program == 'pySED'
         assert saved.variables['coordinates'].filters()['zlib']
-        assert saved.pysed_headers_validated == 1
+        if name.endswith('.xyz'):
+            assert saved.pysed_headers_validated == 1
     stamp = cache.stat().st_mtime_ns
     prepare_trajectory(source, storage_dtype='float64', compression_level=1)
     assert cache.stat().st_mtime_ns == stamp
@@ -54,7 +55,7 @@ def test_dsf_rejects_actual_variable_cell_after_shared_conversion(tmp_path):
 
 
 def test_dsf_rebuilds_unchecked_pysed_cache_from_text(tmp_path):
-    from pySED.io import prepare_trajectory as prepare_sed
+    from pySED.io.prepare import prepare_trajectory as prepare_sed
     source = tmp_path / 'dump.xyz'
     source.write_text(GPUMD_TEXT)
     cache, _ = prepare_sed(source)
@@ -85,3 +86,17 @@ def test_legacy_mdtrace_cache_rebuilt_at_same_path_without_editing_source(tmp_pa
 def test_dsf_does_not_expose_sed_direct_text_block_reader(tmp_path):
     with pytest.raises(ValueError, match='trajectory_read_mode = cache'):
         prepare_trajectory(tmp_path / 'unused.xyz', text_mode='direct')
+
+
+@pytest.mark.parametrize('header,match', [
+    ('Lattice="10 0 0 0 10 0 0 0 10" Properties=species:S:1:pos:R:3:force:R:3', 'Properties changed'),
+    ('Properties=species:S:1:pos:R:3:vel:R:3', 'Lattice'),
+])
+def test_gpumd_rejects_changed_or_missing_headers(tmp_path, header, match):
+    source = tmp_path / 'bad.xyz'
+    lines = GPUMD_TEXT.splitlines()
+    lines[5] = header
+    source.write_text('\n'.join(lines) + '\n')
+    with pytest.raises(ValueError, match=match):
+        prepare_trajectory(source)
+    assert not source.with_name(source.name + '.mdtrace.nc').exists()

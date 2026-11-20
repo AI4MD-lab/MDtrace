@@ -30,6 +30,10 @@ modifications or copied reader files are needed.
 DSF execution
 -------------
 
-The current DSF calculation uses serial NumPy. CUDA and CuPy are not required.
-Installing CuPy does not enable a DSF GPU backend. MDtrace uses pySED's public
-trajectory I/O; it does not run the SED workflow or import a GPU backend.
+DSF uses NumPy with optional CPU multiprocessing controlled by ``max_cores``.
+CUDA and CuPy are not required for this default backend. For a CUDA GPU, install
+one CuPy package matching the installed CUDA major version, then set
+``device = gpu``. For example, choose either ``cupy-cuda12x`` or
+``cupy-cuda13x`` for the corresponding CUDA version. CuPy is loaded only when
+GPU computation is requested. MDtrace reuses pySED's CUDA availability check
+and trajectory I/O; DSF estimation remains in MDtrace.
