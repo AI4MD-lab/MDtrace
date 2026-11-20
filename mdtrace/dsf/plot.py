@@ -3,10 +3,6 @@
 """Plot stored DSF/current spectra without re-reading the MD trajectory."""
 
 import numpy as np
-import seaborn as sns
-from matplotlib import rc_context
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
 from pySED.console import print_detail
 
 from mdtrace.dsf.results import load_spectra, plot_files, plot_has_removed_dc, plot_selection, plot_signature
@@ -53,19 +49,28 @@ def _draw_continuous_map(ax, values, q, freq, extent, cmap, norm):
                     levels=levels if len(levels) > 1 else 1, cmap=cmap, norm=norm, corner_mask=False)
 
 
-@sns.axes_style("ticks")
-@sns.plotting_context("paper", rc={
-    "axes.linewidth": 0.75, "axes.labelsize": 16,
-    "xtick.major.width": 0.75, "ytick.major.width": 0.75,
-    "xtick.labelsize": 13.5, "ytick.labelsize": 13.5,
-})
-@rc_context({
-    "font.family": "sans-serif", "font.sans-serif": ["DejaVu Sans", "Arial"], "mathtext.fontset": "dejavusans",
-    "axes.grid": False, "axes.titlesize": 14,
-})
 def plot_dsf(params):
     """Write each selected map and return the path of the first figure."""
+    import seaborn as sns
+    from matplotlib import rc_context
+
+    paper = {
+        "axes.linewidth": 0.75, "axes.labelsize": 16,
+        "xtick.major.width": 0.75, "ytick.major.width": 0.75,
+        "xtick.labelsize": 13.5, "ytick.labelsize": 13.5,
+    }
+    style = {
+        "font.family": "sans-serif", "font.sans-serif": ["DejaVu Sans", "Arial"],
+        "mathtext.fontset": "dejavusans", "axes.grid": False, "axes.titlesize": 14,
+    }
+    with sns.axes_style("ticks"), sns.plotting_context("paper", rc=paper), rc_context(style):
+        return _plot_dsf(params, sns.color_palette("RdBu_r", as_cmap=True))
+
+
+def _plot_dsf(params, cmap):
     import matplotlib.pyplot as plt
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
 
     prefix = str(params.out_files_name)
     selection = plot_selection(params)
@@ -127,7 +132,6 @@ def plot_dsf(params):
         group = _LABELS[name][2] if log else name
         groups.setdefault(group, []).append(spectra[name])
     color_limits = {key: _color_limits(group) for key, group in groups.items()}
-    cmap = sns.color_palette("RdBu_r", as_cmap=True)
     signature = plot_signature(params)
     show = getattr(params, "if_show_figures", False)
     figures = []
