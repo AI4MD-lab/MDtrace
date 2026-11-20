@@ -1,31 +1,22 @@
 Installation
 ============
 
-MDtrace 1.1.0 requires Python 3.10 or newer.
+The DSF branch requires Python 3.10 or newer.
 
 From source
 -----------
 
 .. code-block:: bash
 
-   git clone https://github.com/Tingliangstu/MDtrace.git mdtrace
-   cd mdtrace
+   conda create -n mdtrace python=3.12 -y
+   conda activate mdtrace
+   git clone --branch codex/remove-sed https://github.com/AI4MD-lab/MDtrace.git
+   cd MDtrace
    python -m pip install .
    mdtrace -h
 
-The required ``pysed-phonon>=3.1,<4``, NumPy, SciPy, netCDF4, Matplotlib and
-Seaborn dependencies are installed automatically once the required pySED release
-is available. For local development, install the matching pySED checkout into
-the same Python environment first:
-
-.. code-block:: powershell
-
-   python -m pip install -e E:/Github/pySED
-   python -m pip install -e E:/Github/MDtrace
-   python -c "import pySED; print(pySED.__file__)"
-
-The printed path should point to the intended local checkout. No source-path
-modifications or copied reader files are needed.
+If you already have a Python environment, start at the clone step. Pip installs
+the required dependencies, including ``pysed-phonon>=3.0`` for trajectory I/O.
 
 DSF execution
 -------------

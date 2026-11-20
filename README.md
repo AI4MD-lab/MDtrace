@@ -32,20 +32,55 @@
 
 The name is self-contained in the phrase: **M**olecular **D**ynamic **Tra**jectory **Trace**. The `MD` captures the simulation method, and `trace` is the action — tracing phonons, tracing spectra, tracing the physics hidden in every atom's path.
 
-MDtrace 1.1.0 is an SED-focused toolkit for extracting eigenvector-free,
-kinetic-energy-weighted phonon spectra from molecular-dynamics trajectories.
-It computes and visualizes total or element/direction-resolved spectral energy
-density (SED) and performs independent Lorentzian or velocity-DHO peak fitting.
+This branch computes the density dynamic structure factor and longitudinal and
+transverse current spectra for crystals and amorphous systems with a fixed
+periodic cell. Density spectra require atomic positions. Current spectra also
+require velocities saved in the same frames.
 
-The development checkout also provides density dynamic structure factors (DSF)
-and longitudinal/transverse particle-current spectra for periodic crystals and
-amorphous systems. See the [DSF workflow](docs/source/dsf_workflow.rst) and
-[input templates](examples/dsf/README.md). This addition is separate from the
-published 1.1.0 SED-only release. EELS remains planned.
+## Installation
 
-Development DSF also supports ``backend = cupy`` for density and longitudinal/
-transverse spectra, neutron weights, self and partial spectra. It uses one CUDA
-GPU with automatic batching and the same normalization/output as the CPU path.
+Use Python 3.10 or newer. To install the DSF version in a fresh Conda environment:
+
+```bash
+conda create -n mdtrace python=3.12 -y
+conda activate mdtrace
+git clone --branch codex/remove-sed https://github.com/AI4MD-lab/MDtrace.git
+cd MDtrace
+python -m pip install .
+mdtrace -h
+```
+
+If you already have a Python environment, start at `git clone`. Pip installs
+the required packages, including `pysed-phonon` for trajectory I/O. The default
+`device = cpu` is ready to use after installation.
+
+**Optional NVIDIA GPU support.** With CUDA 12.x, run
+`python -m pip install cupy-cuda12x`. With CUDA 13.x, use
+`python -m pip install cupy-cuda13x` instead. Set `device = gpu` in your
+MDtrace input file to use the GPU.
+
+## First DSF calculation
+
+Copy the [amorphous input](examples/dsf/amorphous.in) or the
+[crystal input](examples/dsf/crystal.in) to your calculation directory as
+`input.in`. Set `trajectory_file`, `time_step` (fs) and `output_data_stride`
+(MD steps between saved frames) for your trajectory. For a crystal, also set
+the primitive cell and reciprocal-space path. From that directory, run:
+
+```bash
+mdtrace input.in
+```
+
+The templates use `action = thinking` to compute and plot the spectra.
+To redraw saved spectra after changing plot settings, use `action = plot`.
+See the [DSF workflow](docs/source/dsf_workflow.rst) for input and output details.
+
+<details>
+<summary>Earlier SED workflow (release 1.1.0)</summary>
+
+The [1.1.0 release](https://github.com/AI4MD-lab/MDtrace/tree/1.1.0)
+computes and visualizes spectral energy density (SED) and fits phonon peaks.
+The following commands and examples apply to that release.
 
 ## Highlights
 
@@ -67,36 +102,6 @@ GPU with automatic batching and the same normalization/output as the CPU path.
 
 The complete manual is available on
 [Read the Docs](https://mdtrace.readthedocs.io/en/latest/).
-
-## Installation
-
-MDtrace 1.1.0 requires Python 3.10 or newer. Install the current source with:
-
-```bash
-git clone https://github.com/Tingliangstu/MDtrace.git mdtrace
-cd mdtrace
-python -m pip install .
-mdtrace -h
-```
-
-The default NumPy backend does not require CUDA. For GPU SED computation,
-install exactly one CuPy wheel matching the CUDA major version available on the
-machine:
-
-```bash
-# Choose one; do not install both.
-python -m pip install cupy-cuda12x
-python -m pip install cupy-cuda13x
-```
-
-Then set:
-
-```ini
-backend = cupy
-```
-
-MDtrace uses one GPU per process. Peak detection and line-shape fitting remain
-SciPy CPU operations.
 
 ## Command line
 
@@ -273,6 +278,8 @@ includes:
 - optional mode-projected SED using external eigenvectors.
 
 Roadmap items are not part of the supported 1.1.0 command interface.
+
+</details>
 
 ## Citation
 
