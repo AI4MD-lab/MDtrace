@@ -31,9 +31,30 @@ python -m pip install .
 mdtrace -h
 ```
 
-CPU is the default. For an NVIDIA GPU, install the CuPy package for your CUDA
-version (e.g. `python -m pip install cupy-cuda12x` for CUDA 12.x) and set
-`device = gpu` in the input file.
+### NVIDIA GPU (optional)
+
+The installation above runs on the CPU. For GPU calculations:
+
+1. Run `nvidia-smi` and check that it lists your GPU. If you need a driver, install the [NVIDIA driver](https://www.nvidia.com/en-us/drivers/). For WSL 2, install the driver on Windows.
+2. In the `mdtrace` environment, install [CuPy and the CUDA runtime](https://docs.cupy.dev/en/stable/install.html#installing-cupy-from-conda-forge) together:
+
+   ```bash
+   conda activate mdtrace
+   conda install -c conda-forge cupy
+   ```
+
+   If you already have a CUDA Toolkit and prefer pip, check `nvcc --version` and use **one** of these commands instead:
+
+   | Installed CUDA Toolkit | Command |
+   | --- | --- |
+   | 12.x | `python -m pip install cupy-cuda12x` |
+   | 13.x | `python -m pip install cupy-cuda13x` |
+
+3. Run the check below. If it prints `6`, set `device = gpu` in your MDtrace input file. To run a fresh GPU calculation on the training data, also set `action = compute`.
+
+   ```bash
+   python -c "import cupy as cp; print(cp.arange(4).sum().item())"
+   ```
 
 ## Run an amorphous sample
 
