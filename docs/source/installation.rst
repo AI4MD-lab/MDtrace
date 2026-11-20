@@ -1,7 +1,7 @@
 Installation
 ============
 
-The DSF branch requires Python 3.10 or newer.
+MDtrace requires Python 3.10 or newer.
 
 From source
 -----------
@@ -10,7 +10,7 @@ From source
 
    conda create -n mdtrace python=3.12 -y
    conda activate mdtrace
-   git clone --branch codex/remove-sed https://github.com/AI4MD-lab/MDtrace.git
+   git clone https://github.com/AI4MD-lab/MDtrace.git
    cd MDtrace
    python -m pip install .
    mdtrace -h

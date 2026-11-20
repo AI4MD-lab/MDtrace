@@ -32,7 +32,7 @@
 
 The name is self-contained in the phrase: **M**olecular **D**ynamic **Tra**jectory **Trace**. The `MD` captures the simulation method, and `trace` is the action — tracing phonons, tracing spectra, tracing the physics hidden in every atom's path.
 
-This branch computes the density dynamic structure factor and longitudinal and
+MDtrace computes the density dynamic structure factor and longitudinal and
 transverse current spectra for crystals and amorphous systems with a fixed
 periodic cell. Density spectra require atomic positions. Current spectra also
 require velocities saved in the same frames.
@@ -44,7 +44,7 @@ Use Python 3.10 or newer. To install the DSF version in a fresh Conda environmen
 ```bash
 conda create -n mdtrace python=3.12 -y
 conda activate mdtrace
-git clone --branch codex/remove-sed https://github.com/AI4MD-lab/MDtrace.git
+git clone https://github.com/AI4MD-lab/MDtrace.git
 cd MDtrace
 python -m pip install .
 mdtrace -h
