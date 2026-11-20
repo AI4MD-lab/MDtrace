@@ -13,16 +13,13 @@
 #     along with MDTRACE.  If not, see <http://www.gnu.org/licenses/>.
 # =============================================================================
 
-"""Common, SED, and DSF input parameter tables."""
+"""Common and DSF input parameter tables."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
-from pathlib import Path
 
 import numpy as np
-
-from mdtrace.structure.atoms import atomic_masses
 
 
 @dataclass(frozen=True)
@@ -73,16 +70,6 @@ def read_text_list(values):
     return [value.strip("'\"") for value in values]
 
 
-def read_float_list(values):
-    return [float(value) for value in values]
-
-
-def read_int3(values):
-    if len(values) != 3:
-        raise ValueError("requires 3 values")
-    return np.array(values, dtype=int)
-
-
 def read_matrix3(values):
     if len(values) != 9:
         raise ValueError("requires 9 values")
@@ -105,31 +92,13 @@ def read_q_path(values):
     return np.array([_read_number(value) for value in values])
 
 
-def read_partial_sed(values):
-    """Read ``plot_partial_SED = element [x|y|z]``."""
-
-    if len(values) not in {1, 2}:
-        raise ValueError("requires an element and optional x, y, or z")
-
-    element = values[0].strip("'\"").capitalize()
-    if element not in atomic_masses:
-        raise ValueError(
-            f"element '{values[0]}' was not found in the periodic table"
-        )
-
-    direction = values[1].strip("'\"").lower() if len(values) > 1 else None
-    if direction not in {None, "x", "y", "z"}:
-        raise ValueError("direction must be x, y, or z")
-    return True, element, direction
-
-
 # ==================== Common parameters ====================
 
 common_params = {
     # Control
     "action": Parameter("thinking", read_lower_text),
-    "method": Parameter("sed", read_lower_text),
-    "backend": Parameter("numpy", read_lower_text),
+    "method": Parameter("dsf", read_lower_text),
+    "device": Parameter("cpu", read_lower_text),
 
     # Trajectory and output
     "trajectory_file": Parameter("dump.xyz", read_text),
@@ -148,64 +117,43 @@ common_params = {
     "num_blocks": Parameter(5, read_int),
     "max_cores": Parameter(4, read_int),
 
-    # Structure shared by SED and DSF
+    # Reference cell for fractional DSF Q coordinates
     "prim_unitcell": Parameter(None, read_matrix3),
-}
-
-
-# ==================== SED parameters ====================
-
-sed_params = {
-    # MD simulation
-    "num_atoms": Parameter(0, read_int),
-    "total_num_steps": Parameter(0, read_int),
-
-    # Structure
-    "basis_lattice_file": Parameter("basis.in", read_text),
-    "supercell_dim": Parameter(np.array([1, 1, 1]), read_int3),
-    "prim_axis": Parameter(None, read_matrix3),
-    "rescale_prim": Parameter(True, read_bool),
-
-    # Q-points
-    "num_qpaths": Parameter(1, read_int),
-    "q_path_name": Parameter("GA", read_text),
-    "q_path": Parameter(None, read_q_path),
-
-    # Plot
-    "plot_cutoff_freq": Parameter(None, read_optional_float),
-    "plot_interval": Parameter(5.0, read_float),
-    "plot_slice": Parameter(False, read_bool),
-    "qpoint_slice_index": Parameter(0, read_int),
-    "plot_color": Parameter("RdBu_r", read_text),
-    "colorbar_min": Parameter(None, read_optional_float),
-    "colorbar_max": Parameter(None, read_optional_float),
-    "if_show_figures": Parameter(False, read_bool),
-    "use_contourf": Parameter(False, read_bool),
-    "output_partial": Parameter(False, read_bool),
-    "plot_partial_SED": Parameter(
-        (False, None, None),
-        read_partial_sed,
-    ),
-
-    # Spectral peak fit
-    "lorentz_fit_all_qpoint": Parameter(False, read_bool),
-    "lorentz_fit_freq_min": Parameter(None, read_optional_float),
-    "lorentz_fit_freq_max": Parameter(None, read_optional_float),
-    "fitting_function": Parameter("auto", read_lower_text),
-    "peak_min_significance": Parameter(4.0, read_float),
-    "initial_guess_hwhm": Parameter(0.001, read_float),
-    "peak_max_hwhm": Parameter(1e6, read_float),
-    "modulate_factor": Parameter(0, read_int),
-    "re_output_total_freq_lifetime": Parameter(False, read_bool),
 }
 
 
 # ==================== DSF parameters ====================
 
 dsf_params = {
-    "experiment": Parameter("neutron", read_lower_text),
+    "density_weighting": Parameter("equal", read_lower_text),
+    "current_weighting": Parameter("equal", read_lower_text),
     "atom_types": Parameter(None, read_text_list),
-    "dsf_qpoints": Parameter(None, read_float_list),
+    "dsf_qpoints": Parameter(None, read_q_path),
+    "dsf_q_mode": Parameter("explicit", read_lower_text),
+    "dsf_q_coordinates": Parameter("fractional", read_lower_text),
+    "dsf_q_path": Parameter(None, read_q_path),
+    "dsf_q_path_labels": Parameter(None, read_text_list),
+    "dsf_q_min": Parameter(0.0, read_float),
+    "dsf_q_max": Parameter(None, read_optional_float),
+    "dsf_q_bin_width": Parameter(0.1, read_float),
+    "dsf_max_points": Parameter(5000, read_int),
+    "dsf_max_points_per_shell": Parameter(None, read_int),  # Legacy input files.
+    "dsf_seed": Parameter(0, read_int),
+    "dsf_cell": Parameter(None, read_matrix3),
+    "dsf_currents": Parameter(False, read_bool),
+    "dsf_output_components": Parameter(False, read_bool),
+    "dsf_output_sem": Parameter(False, read_bool),
+    "dsf_save_q_resolved": Parameter(False, read_bool),
+    "dsf_partials": Parameter(False, read_bool),
+    "dsf_normalization": Parameter("density", read_lower_text),
+    "dsf_subtract_mean": Parameter(False, read_bool),
+    "dsf_plot_density": Parameter(True, read_bool),
+    "dsf_plot_currents": Parameter(True, read_bool),
+    "dsf_plot_frequency_max": Parameter(None, read_optional_float),
+    "dsf_plot_energy_min": Parameter(None, read_optional_float),
+    "dsf_plot_energy_max": Parameter(None, read_optional_float),
+    "dsf_plot_scale": Parameter("log", read_lower_text),
+    "if_show_figures": Parameter(False, read_bool),
 }
 
 
@@ -214,18 +162,19 @@ dsf_params = {
 # EELS-specific parameters will be added with the calculation method.
 eels_params = {}
 
-supported_backends = {"numpy", "cupy"}
-
-
 # ==================== Validation ====================
 
+def _validate_device(params):
+    if hasattr(params, "backend"):
+        raise ValueError("unknown parameter 'backend'. Use device = cpu or gpu")
+    if getattr(params, "device", "cpu") not in {"cpu", "gpu"}:
+        raise ValueError("device must be cpu or gpu")
+
+
 def validate_common(params):
-    if params.backend not in supported_backends:
-        supported = ", ".join(sorted(supported_backends))
-        raise ValueError(
-            f"backend '{params.backend}' is not available; "
-            f"supported backends: {supported}"
-        )
+    if params.action not in {"thinking", "compute", "plot"}:
+        raise ValueError("action must be thinking, compute, or plot; SED fitting is provided by pySED")
+    _validate_device(params)
     if params.lammps_unit not in {"metal", "real"}:
         raise ValueError("lammps_unit must be 'metal' or 'real'")
     if params.trajectory_read_mode not in {"cache", "direct"}:
@@ -234,7 +183,7 @@ def validate_common(params):
         )
 
     needs_trajectory = (
-        params.method in {"sed", "dsf"}
+        params.method == "dsf"
         and params.action in {"thinking", "compute"}
     )
     if needs_trajectory and params.time_step <= 0:
@@ -257,213 +206,90 @@ def validate_common(params):
         raise ValueError("netcdf_batch_size must be positive")
 
 
-def validate_qpoint_slice_index(params, qpoints=None):
-    """Validate the zero-based q-point selection parameter."""
-
-    q_index = params.qpoint_slice_index
-    if q_index < 0:
-        raise ValueError(
-            "qpoint_slice_index must be non-negative (zero-based)"
-        )
-    if qpoints is None:
-        return
-
-    num_qpoints = len(np.atleast_2d(qpoints))
-    if q_index >= num_qpoints:
-        raise ValueError(
-            f"qpoint_slice_index = {q_index} is out of range: "
-            f"{num_qpoints} q-points are available; valid zero-based "
-            f"indices are 0 to {num_qpoints - 1}."
-        )
+def get_density_weighting(params):
+    """Resolve the public weighting name, including legacy Python callers."""
+    weighting = getattr(params, "density_weighting", None)
+    experiment = getattr(params, "experiment", None)
+    if experiment is not None:
+        if weighting is not None:
+            raise ValueError("specify density_weighting or legacy experiment, not both")
+        if experiment not in {"number", "neutron"}:
+            raise ValueError("legacy experiment = neutron or number only; use density_weighting = equal or neutron")
+        weighting = "equal" if experiment == "number" else "neutron"
+    if weighting is None:
+        weighting = dsf_params["density_weighting"].default
+    if weighting not in {"equal", "neutron"}:
+        raise ValueError("density_weighting must be equal or neutron")
+    return weighting
 
 
-def validate_sed(params):
-    """Validate and prepare SED parameters."""
+def validate_dsf(params, *, compute=False):
+    from mdtrace.dsf.qpoints import as_qpoints, validate_cell
 
-    needs_compute = params.action in {"thinking", "compute"}
-    if needs_compute and params.num_atoms <= 0:
-        raise ValueError("num_atoms must be positive for SED computation")
-    if needs_compute and params.total_num_steps <= 0:
-        raise ValueError(
-            "total_num_steps must be positive for SED computation"
-        )
-    if params.num_atoms < 0:
-        raise ValueError("num_atoms must not be negative")
-    if params.total_num_steps < 0:
-        raise ValueError("total_num_steps must not be negative")
-    if params.num_qpaths < 1:
-        raise ValueError("num_qpaths must be positive")
-    validate_qpoint_slice_index(params)
-    if np.any(params.supercell_dim <= 0):
-        raise ValueError("supercell_dim values must be positive")
-    for name in ("colorbar_min", "colorbar_max"):
-        value = getattr(params, name)
-        if value is not None and not np.isfinite(value):
-            raise ValueError(f"{name} must be finite")
-    if (
-        params.colorbar_min is not None
-        and params.colorbar_max is not None
-        and params.colorbar_min >= params.colorbar_max
-    ):
-        raise ValueError(
-            "colorbar_min must be smaller than colorbar_max"
-        )
-    if (
-        not np.isfinite(params.peak_min_significance)
-        or params.peak_min_significance <= 0
-    ):
-        raise ValueError("peak_min_significance must be positive and finite")
-    if (
-        params.lorentz_fit_freq_min is not None
-        and (
-            not np.isfinite(params.lorentz_fit_freq_min)
-            or params.lorentz_fit_freq_min < 0
-        )
-    ):
-        raise ValueError(
-            "lorentz_fit_freq_min must be non-negative and finite"
-        )
-    if (
-        params.lorentz_fit_freq_max is not None
-        and (
-            not np.isfinite(params.lorentz_fit_freq_max)
-            or params.lorentz_fit_freq_max <= 0
-        )
-    ):
-        raise ValueError("lorentz_fit_freq_max must be positive and finite")
-    if (
-        params.lorentz_fit_freq_min is not None
-        and params.lorentz_fit_freq_max is not None
-        and params.lorentz_fit_freq_min >= params.lorentz_fit_freq_max
-    ):
-        raise ValueError(
-            "lorentz_fit_freq_min must be smaller than "
-            "lorentz_fit_freq_max"
-        )
-    supported_fitting_functions = {"lorentz", "dho", "auto"}
-    if params.fitting_function not in supported_fitting_functions:
-        supported = ", ".join(sorted(supported_fitting_functions))
-        raise ValueError(
-            f"fitting_function must be one of: {supported}"
-        )
-    if (
-        not np.isfinite(params.initial_guess_hwhm)
-        or params.initial_guess_hwhm <= 0
-    ):
-        raise ValueError("initial_guess_hwhm must be positive and finite")
-    if (
-        not np.isfinite(params.peak_max_hwhm)
-        or params.peak_max_hwhm <= 0
-    ):
-        raise ValueError("peak_max_hwhm must be positive and finite")
-    if params.initial_guess_hwhm > params.peak_max_hwhm:
-        raise ValueError(
-            "initial_guess_hwhm must not exceed peak_max_hwhm"
-        )
-    if params.modulate_factor < 0:
-        raise ValueError("modulate_factor must be non-negative")
-
-    if needs_compute and params.prim_unitcell is None:
-        raise ValueError("prim_unitcell is required for SED computation")
-    if params.prim_unitcell is not None:
-        if not np.all(np.isfinite(params.prim_unitcell)):
-            raise ValueError("prim_unitcell values must be finite")
-        if np.isclose(np.linalg.det(params.prim_unitcell), 0.0):
-            raise ValueError("prim_unitcell must not be singular")
-
-    if needs_compute and params.q_path is None:
-        raise ValueError("q_path is required for SED computation")
-    if params.q_path is not None:
-        expected = (params.num_qpaths + 1) * 3
-        if params.q_path.size != expected:
-            raise ValueError(
-                f"q_path requires {expected} values for "
-                f"num_qpaths = {params.num_qpaths}"
-            )
-        if not np.all(np.isfinite(params.q_path)):
-            raise ValueError("q_path values must be finite")
-        if len(params.q_path_name) != params.num_qpaths + 1:
-            raise ValueError(
-                "q_path_name requires "
-                f"{params.num_qpaths + 1} labels for "
-                f"num_qpaths = {params.num_qpaths}"
-            )
-
-    if needs_compute:
-        if params.total_num_steps % params.output_data_stride:
-            raise ValueError(
-                "total_num_steps must be divisible by "
-                "output_data_stride"
-            )
-        num_frames = (
-            params.total_num_steps // params.output_data_stride
-        )
-        if num_frames < params.num_blocks:
-            raise ValueError(
-                "the number of trajectory frames must not be smaller "
-                "than num_blocks"
-            )
-        if num_frames % params.num_blocks:
-            raise ValueError(
-                "the number of trajectory frames must be divisible by "
-                "num_blocks"
-            )
-        if not Path(params.basis_lattice_file).is_file():
-            raise ValueError(
-                f"input structure '{params.basis_lattice_file}' "
-                "was not found"
-            )
-
-    (
-        params.plot_partial_SED,
-        params.plot_partial_element,
-        params.plot_partial_dir,
-    ) = params.plot_partial_SED
-
-    if params.plot_partial_SED:
-        try:
-            masses = np.loadtxt(
-                params.basis_lattice_file,
-                skiprows=2,
-                usecols=3,
-            )
-        except OSError as error:
-            raise ValueError(
-                f"input structure '{params.basis_lattice_file}' "
-                "was not found"
-            ) from error
-
-        unique_masses = np.unique(np.atleast_1d(masses))
-        matches = np.flatnonzero(
-            np.isclose(
-                unique_masses,
-                atomic_masses[params.plot_partial_element],
-                rtol=0.0,
-                atol=5.0e-2,
-            )
-        )
-        if not len(matches):
-            raise ValueError(
-                f"element '{params.plot_partial_element}' was not found "
-                f"in the input structure '{params.basis_lattice_file}'"
-            )
-
-    # Filled later when phonopy eigenvectors are used.
-    params.with_eigs = None
-
-
-def validate_dsf(params):
-    if params.dsf_qpoints is not None and len(params.dsf_qpoints) % 3:
-        raise ValueError("dsf_qpoints requires groups of 3 values")
-    if params.action in {"thinking", "compute"}:
-        if not params.atom_types:
-            raise ValueError("atom_types is required for DSF computation")
-        if not params.dsf_qpoints:
-            raise ValueError("dsf_qpoints is required for DSF computation")
-        if params.prim_unitcell is None:
-            raise ValueError(
-                "prim_unitcell is required for DSF computation"
-            )
+    value = lambda name: getattr(params, name, dsf_params[name].default)
+    weighting = get_density_weighting(params)
+    if value("current_weighting") != "equal":
+        raise ValueError("current_weighting currently supports equal only (particle current)")
+    if compute or getattr(params, "action", "compute") in {"thinking", "compute"}:
+        _validate_device(params)
+        if getattr(params, "trajectory_read_mode", "cache") != "cache":
+            raise ValueError("DSF requires trajectory_read_mode = cache")
+        if weighting == "neutron" and value("atom_types") is None:
+            raise ValueError("atom_types is required for neutron DSF computation")
+        mode = value("dsf_q_mode")
+        if mode not in {"explicit", "path", "spherical"}:
+            raise ValueError("dsf_q_mode must be explicit, path, or spherical")
+        if value("dsf_q_coordinates") not in {"fractional", "cartesian"}:
+            raise ValueError("dsf_q_coordinates must be fractional or cartesian")
+        primitive = getattr(params, "prim_unitcell", None)
+        if primitive is not None:
+            validate_cell(primitive, "prim_unitcell")
+        if value("dsf_cell") is not None:
+            validate_cell(value("dsf_cell"), "dsf_cell")
+        if mode == "explicit":
+            as_qpoints(value("dsf_qpoints"), "dsf_qpoints")
+            if value("dsf_q_coordinates") == "fractional" and primitive is None:
+                raise ValueError("fractional dsf_qpoints require prim_unitcell")
+        elif mode == "path":
+            if value("dsf_q_coordinates") != "fractional":
+                raise ValueError("dsf_q_path uses fractional coordinates; set dsf_q_coordinates = fractional")
+            if primitive is None:
+                raise ValueError("dsf_q_mode = path requires prim_unitcell")
+            points = as_qpoints(value("dsf_q_path"), "dsf_q_path")
+            if len(points) < 2:
+                raise ValueError("dsf_q_path requires at least two endpoints")
+            labels = value("dsf_q_path_labels")
+            if labels is not None and len(labels) != len(points):
+                raise ValueError("dsf_q_path_labels must contain one label per endpoint")
+        else:
+            low, high, width = value("dsf_q_min"), value("dsf_q_max"), value("dsf_q_bin_width")
+            if high is None or not np.isfinite([low, high, width]).all() or not (0 <= low < high and width > 0):
+                raise ValueError("spherical sampling requires 0 <= dsf_q_min < dsf_q_max and positive dsf_q_bin_width")
+            cap = value("dsf_max_points")
+            if not np.isfinite(cap) or cap < 0 or int(cap) != cap or cap == 1:
+                raise ValueError("dsf_max_points must be 0 (all) or an integer of at least 2")
+            legacy_cap = value("dsf_max_points_per_shell")
+            if legacy_cap is not None and (legacy_cap < 0 or int(legacy_cap) != legacy_cap or legacy_cap % 2):
+                raise ValueError("dsf_max_points_per_shell must be 0 (all) or a positive even integer")
+            seed = value("dsf_seed")
+            if seed < 0 or int(seed) != seed:
+                raise ValueError("dsf_seed must be a nonnegative integer")
+        if mode != "explicit" and value("dsf_qpoints") is not None:
+            raise ValueError("dsf_qpoints is only used with dsf_q_mode = explicit")
+        if mode != "path" and value("dsf_q_path") is not None:
+            raise ValueError("dsf_q_path is only used with dsf_q_mode = path")
+        if value("dsf_normalization") not in {"density", "legacy"}:
+            raise ValueError("dsf_normalization must be density or legacy")
+    if value("dsf_plot_scale") not in {"linear", "log"}:
+        raise ValueError("dsf_plot_scale must be linear or log")
+    cutoff = value("dsf_plot_frequency_max")
+    if cutoff is not None and (not np.isfinite(cutoff) or cutoff <= 0):
+        raise ValueError("dsf_plot_frequency_max must be finite and positive")
+    emin, emax = value("dsf_plot_energy_min"), value("dsf_plot_energy_max")
+    if any(x is not None and not np.isfinite(x) for x in (emin, emax)):
+        raise ValueError("DSF plot energy limits must be finite")
+    if emin is not None and emax is not None and emin >= emax:
+        raise ValueError("dsf_plot_energy_min must be less than dsf_plot_energy_max")
 
 
 def validate_eels(params):
@@ -472,10 +298,6 @@ def validate_eels(params):
 
 # Adding a method requires its parameter table and validator.
 methods = {
-    "sed": {
-        "parameters": sed_params,
-        "validate": validate_sed,
-    },
     "dsf": {
         "parameters": dsf_params,
         "validate": validate_dsf,
@@ -491,5 +313,4 @@ __all__ = [
     "common_params",
     "methods",
     "validate_common",
-    "validate_qpoint_slice_index",
 ]

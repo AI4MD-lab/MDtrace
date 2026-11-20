@@ -1,6 +1,43 @@
 Release notes
 =============
 
+Development: SED removed from MDtrace
+-------------------------------------------
+
+* DSF is now the default method. Supported actions are ``thinking``, ``compute``
+  and ``plot``. Explicit ``method = sed`` reports a migration message to pySED.
+* SED kernels, GPU execution, peak fitting, lifetime output and SED structure
+  preparation have been removed. MDtrace no longer selects ``input_SED.in``
+  automatically.
+* The exact commensurate-path solver is retained under ``mdtrace.dsf``.
+  Density/current algorithms, neutron data and trajectory readers are unchanged
+  by this removal. No pySED dependency is introduced in this step.
+* Existing trajectories and calculated results are not migrated or deleted.
+  The published 1.1.0 release and tag retain their historical SED interface.
+
+Development: crystal and amorphous DSF
+--------------------------------------
+
+The current checkout adds density DSF and longitudinal/transverse particle
+currents, fixed-cell periodic Q validation, crystal paths, isotropic shell
+averaging, normalized frequency densities, and text-based plotting.
+It also adds undefined (NaN) single-block SEMs, shell coverage diagnostics,
+optional per-Q time blocks and complex element-pair spectra, and independent
+rebinning/neutron reweighting. Gaussian/Lorentzian resolution convolution,
+per-meV conversion and two-sided QENS plotting share the same saved results.
+Optional tests exercise dynasor 2.5 with explicit unit, estimator and transverse
+polarization conversions.
+The original neutron data table is preserved. See :doc:`dsf_workflow` for
+supported inputs, examples and validation boundaries. This entry does not change
+the published 1.1.0 release or its version tag.
+
+Density weights now use ``density_weighting = equal`` or ``neutron``. The
+default changes from neutron weighting to equal atom weights; neutron analyses
+must select ``neutron`` explicitly. ``current_weighting = equal`` describes
+the existing particle currents and is currently the only current choice.
+Explicit legacy ``experiment = number/neutron`` inputs remain accepted, and
+renaming that setting alone does not invalidate matching saved text results.
+
 Version 1.1.0
 -------------
 

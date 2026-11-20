@@ -27,6 +27,8 @@ setup(
     license_files=["LICENSE"],
     packages=find_packages(exclude=("tests", "tests.*")),
     install_requires=[
+        "pysed-phonon>=3.0",
+        "threadpoolctl>=3.1",
         "numpy",
         "scipy",
         "netCDF4",

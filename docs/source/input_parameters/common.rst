@@ -23,9 +23,9 @@ reference page.
      - :doc:`Control <common_control>`
      - ``sed``
      - Select the analysis method.
-   * - :doc:`backend <backend>`
+   * - :doc:`device <device>`
      - :doc:`Control <common_control>`
-     - ``numpy``
+     - ``cpu``
      - Select NumPy or optional CuPy.
    * - :doc:`trajectory_file <trajectory_file>`
      - :doc:`Trajectory and sampling <common_trajectory>`

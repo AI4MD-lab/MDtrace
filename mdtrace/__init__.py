@@ -17,7 +17,7 @@
 """mdtrace — Molecular Dynamics Trace.
 
 Trace reciprocal-space physics inside molecular-dynamics trajectories.
-The supported 1.1.0 workflow is phonon spectral energy density (SED).
+The current workflow computes density and particle-current spectra from trajectories.
 """
 
 from mdtrace.version import __version__  # noqa F401

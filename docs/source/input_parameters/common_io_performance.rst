@@ -1,7 +1,7 @@
 I/O and performance
 ===================
 
-These parameters control how trajectory blocks reach the SED kernel and how
+These parameters control how trajectories reach the DSF calculation and how
 much CPU parallelism or NetCDF compression is used.
 
 .. list-table::
@@ -14,10 +14,10 @@ much CPU parallelism or NetCDF compression is used.
      - Purpose
    * - :doc:`trajectory_read_mode <trajectory_read_mode>`
      - ``cache``
-     - Convert text once to reusable NetCDF or stream it directly once.
+     - Convert text once to reusable NetCDF; native NetCDF is read directly.
    * - :doc:`trajectory_prefetch <trajectory_prefetch>`
      - ``1``
-     - Load at most one next block in a background thread.
+     - Prepare at most one next small batch for streamed density/current DSF.
    * - :doc:`netcdf_batch_size <netcdf_batch_size>`
      - ``64``
      - Set the number of text frames parsed per batch.

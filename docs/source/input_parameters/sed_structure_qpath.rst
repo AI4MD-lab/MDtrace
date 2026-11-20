@@ -24,6 +24,9 @@ the exact Q points compatible with the finite MD supercell.
    * - :doc:`supercell_dim <supercell_dim>`
      - ``1 1 1``
      - Set primitive-cell repetitions and Q-point resolution.
+   * - :doc:`dump_group_supercell <dump_group_supercell>`
+     - ``None``
+     - Set the local cell represented by ``basis.in`` for a dumped group.
    * - :doc:`rescale_prim <rescale_prim>`
      - ``1``
      - Reconstruct the primitive cell from a relaxed trajectory cell.
@@ -64,6 +67,7 @@ and treatment of non-orthogonal cells.
    prim_unitcell
    prim_axis
    supercell_dim
+   dump_group_supercell
    rescale_prim
    num_qpaths
    q_path_name

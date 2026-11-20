@@ -16,6 +16,15 @@
 
 """mdtrace.dsf — Dynamic structure factor module."""
 
-from mdtrace.dsf.dsf import compute_dsf, save_dsf
+__all__ = ["compute_dsf", "save_dsf", "load_spectra"]
 
-__all__ = ["compute_dsf", "save_dsf"]
+
+def __getattr__(name):
+    """Load only the requested API, keeping numerical-only imports lightweight."""
+    if name == "compute_dsf":
+        from mdtrace.dsf.dsf import compute_dsf
+        return compute_dsf
+    if name in {"save_dsf", "load_spectra"}:
+        from mdtrace.dsf import results
+        return getattr(results, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

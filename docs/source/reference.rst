@@ -1,8 +1,8 @@
 Citation
 ========
 
-If you use **MDtrace** in your research or publications, please cite the MDtrace
-paper and the original SED method paper:
+The following references document the original pySED/SED work from which
+MDtrace developed. SED analysis is now provided separately by pySED:
 
 [1] Ting Liang, Wenwu Jiang, Ke Xu, Hekai Bu, Zheyong Fan, Wengen Ouyang, Jianbin Xu,  
 `PYSED: A tool for extracting kinetic-energy-weighted phonon dispersion and lifetime from molecular dynamics simulations <https://doi.org/10.1063/5.0278798>`_,  
@@ -12,5 +12,5 @@ paper and the original SED method paper:
 `Predicting phonon dispersion relations and lifetimes from the spectral energy density <https://journals.aps.org/prb/abstract/10.1103/PhysRevB.81.081411>`_,  
 *Physical Review B*, **81**, 081411 (2010).
 
-These references also provide the main theoretical background for the
-kinetic-energy-weighted spectral energy density (SED) method used in MDtrace.
+For current DSF definitions and neutron scattering data sources, see
+:doc:`dsf_workflow`.

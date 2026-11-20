@@ -13,45 +13,57 @@
 #     along with MDTRACE. If not, see <http://www.gnu.org/licenses/>.
 # =============================================================================
 
-"""Detect and prepare the trajectory consumed by MDtrace."""
+"""Keep MDtrace cache names while delegating conversion to pySED."""
 
-from __future__ import annotations
-
+from inspect import signature
+from itertools import islice
 from pathlib import Path
 
-from mdtrace.io.netcdf import (
-    NetCDFReader,
-    converted_file_is_current,
-    is_netcdf,
-)
-from mdtrace.io.text import convert_text_trajectory, detect_text_format
+import numpy as np
+from netCDF4 import Dataset
+from pySED.io.netcdf import converted_file_is_current
+from pySED.io.prepare import detect_trajectory, prepare_trajectory as prepare_with_pysed
+from pySED.io.text import _gpumd_columns, _lattice_from_comment
+
+from mdtrace.io import NetCDFReader, is_netcdf, require_current_cache
+
+
+_VALIDATES_HEADERS = "validate_headers" in signature(prepare_with_pysed).parameters
+
+
+def _gpumd_cells(source):
+    """Check headers omitted by pySED 3.0's fast parser, without parsing atoms."""
+    cells = []
+    previous = None
+    columns = None
+    expected_atoms = None
+    with source.open(encoding="utf-8") as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            n_atoms = int(line)
+            if n_atoms < 1 or (expected_atoms is not None and n_atoms != expected_atoms):
+                raise ValueError("GPUMD atom count must be positive and fixed")
+            expected_atoms = n_atoms
+            comment = next(stream, "")
+            if comment != previous:
+                frame_columns, _ = _gpumd_columns(comment)
+                if columns is not None and frame_columns != columns:
+                    raise ValueError("GPUMD XYZ Properties changed between frames")
+                columns = frame_columns
+                cell = _lattice_from_comment(comment)
+                if cell is None or not np.isfinite(cell).all():
+                    raise ValueError("GPUMD XYZ requires a finite Lattice in every frame")
+                previous = comment
+            if sum(1 for _ in islice(stream, n_atoms)) != n_atoms:
+                raise EOFError("truncated GPUMD XYZ atom block")
+            cells.append(cell)
+    return np.asarray(cells)
 
 
 def default_converted_path(source: Path) -> Path:
     path = Path(source)
     return path.with_name(f"{path.name}.mdtrace.nc")
-
-
-def detect_trajectory(source: Path) -> str:
-    """Return the actual source format; there is no user format setting."""
-
-    source = Path(source).expanduser()
-    if not source.is_file():
-        raise FileNotFoundError(f"trajectory '{source}' does not exist")
-
-    if not is_netcdf(source):
-        return detect_text_format(source)
-
-    with NetCDFReader(source) as trajectory:
-        if trajectory.info.source_format:
-            return trajectory.info.source_format
-        program = (trajectory.info.source_program or "").lower()
-
-    if "lammps" in program:
-        return "lammps_netcdf"
-    if "gpumd" in program:
-        return "gpumd_netcdf"
-    return "mdtrace_netcdf"
 
 
 def prepare_trajectory(
@@ -64,35 +76,47 @@ def prepare_trajectory(
     text_mode: str = "cache",
     force: bool = False,
 ) -> tuple[Path, str]:
-    """Return the trajectory path selected for the compute pipeline."""
+    """Prepare checked trajectories with pySED's streaming parser and writer.
 
-    source = Path(source).expanduser()
-    source_format = detect_trajectory(source)
-    if is_netcdf(source):
-        return source, source_format
-    if text_mode == "direct":
-        return source, source_format
+    DSF needs positions and truthful per-frame cells. Keep header validation
+    enabled, including when deciding whether an existing cache can be reused.
+    """
     if text_mode != "cache":
-        raise ValueError("text_mode must be 'cache' or 'direct'")
-
-    output = (
-        Path(converted_path)
-        if converted_path is not None
-        else default_converted_path(source)
-    )
-    if force or not converted_file_is_current(
-        output,
-        source,
+        raise ValueError("DSF requires trajectory_read_mode = cache")
+    source = Path(source).expanduser()
+    output = Path(converted_path) if converted_path is not None else default_converted_path(source)
+    options = dict(
+        source=source, converted_path=output,
+        batch_size=batch_size,
         compression_level=compression_level,
         storage_dtype=storage_dtype,
+        lammps_unit=lammps_unit,
+        text_mode=text_mode,
+        force=force,
+    )
+    if _VALIDATES_HEADERS:
+        return prepare_with_pysed(**options, validate_headers=True)
+
+    # pySED 3.0 keeps the same array reader and compressor. Only GPUMD text
+    # needs a header pass on conversion; native .nc and cache reuse do not.
+    source_format = detect_trajectory(source)
+    if is_netcdf(source):
+        with NetCDFReader(source) as reader:
+            require_current_cache(reader)
+        return source, source_format
+    if source_format != "gpumd_xyz":
+        return prepare_with_pysed(**options)
+    if not force and converted_file_is_current(
+        output, source, compression_level=compression_level,
+        storage_dtype=storage_dtype, lammps_unit=lammps_unit, source_format=source_format,
     ):
-        convert_text_trajectory(
-            source=source,
-            output=output,
-            source_format=source_format,
-            batch_size=batch_size,
-            compression_level=compression_level,
-            storage_dtype=storage_dtype,
-            lammps_unit=lammps_unit,
-        )
-    return output, source_format
+        with Dataset(str(output)) as dataset:
+            if getattr(dataset, "pysed_headers_validated", 0) == 1:
+                return output, source_format
+    cells = _gpumd_cells(source)
+    options["force"] = True
+    prepared = prepare_with_pysed(**options)
+    with Dataset(str(output), "a") as dataset:
+        dataset.variables["cell_vectors"][:] = cells
+        dataset.pysed_headers_validated = 1
+    return prepared

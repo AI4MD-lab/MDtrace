@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # =============================================================================
 #     Copyright 2025-2026 Ting Liang and MDTRACE development team
 #     This file is part of MDTRACE.
@@ -13,210 +14,485 @@
 #     along with MDTRACE.  If not, see <http://www.gnu.org/licenses/>.
 # =============================================================================
 
+"""DSF and particle-current spectra for periodic crystals and disordered systems.
 
+The original density-spectrum estimator and optional legacy normalization
+follow ``pynamic-structure-factor``. The default is now a two-sided spectral
+density per THz. Full complex neutron amplitudes and |b_inc|**2 are retained.
+Longitudinal/transverse currents use number weights and velocities in A/ps.
+These classical spectra are not absolute experimental cross sections.
 """
-mdtrace DSF — minimal dynamic structure factor computation.
 
-Pure NumPy implementation backed by the shared NetCDF trajectory reader.
-Step 1: single-crystal coherent neutron S(Q,ω) via direct estimator.
-"""
+from __future__ import annotations
+
+from collections import Counter
+from contextlib import closing
+from fractions import Fraction
+from functools import partial
+from math import ceil, floor
+from pathlib import Path
+import warnings
+
 import numpy as np
+from pySED.console import print_detail, print_section
+from mdtrace.console import calculation_progress, frame_range
 
-from mdtrace.io.netcdf import NetCDFReader
-
-# ── neutron scattering data (Sears 1992) ────────────────────────
-
-_NEUTRON_COHERENT_LENGTH_FM = {
-    "H": -3.7390,  "D": 6.671,   "B": 5.30,    "C": 6.6460,
-    "N": 9.36,     "O": 5.803,   "Na": 3.63,   "Al": 3.449,
-    "Si": 4.1491,  "P": 5.13,    "S": 2.847,   "Mo": 6.715,
-    "Cu": 7.718,   "Se": 7.970,  "Zr": 7.16,   "W": 4.86,
-}
-
-
-def _get_neutron_weights(atom_types):
-    """Return coherent scattering lengths for each atom in the supercell."""
-    return np.array([_NEUTRON_COHERENT_LENGTH_FM[t] for t in atom_types], dtype=float)
+from mdtrace.io import NetCDFReader, is_netcdf, require_current_cache
+from mdtrace.io import ATOM_IDS, CELLS, POSITIONS, TIMES, TYPES, VELOCITIES
+from mdtrace.dsf.qpoints import average_q_groups, build_qpoints, validate_cell
+from mdtrace.dsf.spectra import PLANCK_MEV_PS, block_spectra, mean_and_sem
+from mdtrace.dsf.parallel import DSFExecutor
+from mdtrace.dsf.streaming import stream_blocks
+from mdtrace.dsf.scattering import neutron_weights
+from mdtrace.dsf.results import calculation_configuration, source_signature, save_dsf, spectrum_units
+from mdtrace.dsf.partials import species_layout
 
 
-# ── main entry point ────────────────────────────────────────────
+def _constant_type_ids(raw_types: np.ndarray, n_atoms: int) -> np.ndarray:
+    """Validate that each atom keeps one trajectory type across all frames."""
+
+    raw_types = np.asarray(raw_types)
+    if raw_types.ndim == 1:
+        type_ids = raw_types
+    elif raw_types.ndim == 2:
+        if raw_types.shape[0] == 0:
+            raise ValueError("trajectory contains no atom type frames")
+        type_ids = raw_types[0]
+        if not np.all(raw_types == type_ids[None, :]):
+            raise ValueError(
+                "DSF requires each atom's trajectory type ID to remain "
+                "constant across frames"
+            )
+    else:
+        raise ValueError(
+            "trajectory atom types must have shape (atom,) or (frame, atom)"
+        )
+    if type_ids.shape != (n_atoms,):
+        raise ValueError(
+            f"trajectory atom types have shape {type_ids.shape}, expected "
+            f"({n_atoms},)"
+        )
+    return type_ids
+
+
+def _atom_frame_order(raw_ids: np.ndarray, n_atoms: int, n_frames: int):
+    """Align frame-dependent IDs to the first frame, keeping its atom order.
+
+    A static ID array (or an unchanged order) needs no permutation. Without
+    trajectory IDs the caller must assume a stable atom order across frames.
+    """
+
+    atom_ids = np.asarray(raw_ids)
+    if atom_ids.shape not in {(n_atoms,), (n_frames, n_atoms)}:
+        raise ValueError(
+            "trajectory atom IDs must have shape (atom,) or (frame, atom) "
+            "matching the positions"
+        )
+    if not np.all(np.isfinite(atom_ids)) or not np.all(atom_ids == np.floor(atom_ids)):
+        raise ValueError("trajectory atom IDs must be finite integers")
+    reference = atom_ids if atom_ids.ndim == 1 else atom_ids[0]
+    reference_order = np.argsort(reference)
+    sorted_reference = reference[reference_order]
+    if np.any(sorted_reference[1:] == sorted_reference[:-1]):
+        raise ValueError("trajectory atom IDs must be unique in each frame")
+    if atom_ids.ndim == 1 or np.all(atom_ids == reference[None, :]):
+        return None
+
+    order = np.argsort(atom_ids, axis=1)
+    if not np.all(np.take_along_axis(atom_ids, order, axis=1) == sorted_reference):
+        raise ValueError("trajectory atom IDs must contain the same unique set in every frame")
+    return order[:, np.argsort(reference_order)]
+
+
+def _map_atom_labels(
+    type_ids: np.ndarray,
+    atom_types,
+) -> tuple[np.ndarray, dict[object, str]]:
+    """Map sorted trajectory type IDs to labels without count assumptions.
+
+    GPUMD text caches number types by species' first appearance in the file.
+    """
+
+    if not atom_types:
+        raise ValueError("atom_types is required for DSF computation")
+    labels = [str(label) for label in atom_types]
+    unique_ids = np.unique(type_ids)
+
+    if len(labels) == len(unique_ids):
+        mapping = {
+            type_id.item() if hasattr(type_id, "item") else type_id: label
+            for type_id, label in zip(unique_ids, labels)
+        }
+        per_atom = np.asarray(
+            [mapping[value.item() if hasattr(value, "item") else value]
+             for value in type_ids],
+            dtype=str,
+        )
+        return per_atom, mapping
+
+    # Retain the useful legacy form where one label is supplied per atom.
+    if len(labels) == len(type_ids):
+        per_atom = np.asarray(labels, dtype=str)
+        mapping = {}
+        for type_id in unique_ids:
+            key = type_id.item() if hasattr(type_id, "item") else type_id
+            assigned = np.unique(per_atom[type_ids == type_id])
+            if len(assigned) != 1:
+                raise ValueError(
+                    f"trajectory type ID {key!r} maps to multiple atom_types: "
+                    f"{assigned.tolist()}"
+                )
+            mapping[key] = str(assigned[0])
+        return per_atom, mapping
+
+    raise ValueError(
+        f"atom_types contains {len(labels)} labels, but the trajectory has "
+        f"{len(unique_ids)} unique type IDs and {len(type_ids)} atoms; "
+        "provide one label per sorted unique type ID (recommended), or one "
+        "label per atom"
+    )
+
+
+def _compute_block_spectra(
+    positions: np.ndarray,
+    q_cart: np.ndarray,
+    coherent_weights: np.ndarray,
+    incoherent_weights_sq: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compatibility entry point for the original pynamic-normalized estimator."""
+    result = block_spectra(
+        positions, q_cart, coherent_weights, incoherent_weights_sq,
+        dt_ps=1.0, normalization="legacy",
+    )
+    return result["coherent_sqw"], result["incoherent_sqw"]
+
+
+def _fixed_cell(trajectory, params, frames_used):
+    supplied = getattr(params, "dsf_cell", None)
+    if supplied is not None:
+        supplied = validate_cell(supplied, "dsf_cell")
+    if CELLS not in trajectory.info.fields:
+        if supplied is None:
+            raise ValueError("DSF requires a periodic simulation cell in the trajectory or dsf_cell")
+        return supplied
+    cells = trajectory.read_cells(slice(0, frames_used))
+    reference = validate_cell(cells[0], "trajectory cell")
+    if cells.shape != (frames_used, 3, 3) or not np.isfinite(cells).all():
+        raise ValueError("trajectory cells must be finite and match the number of frames")
+    if not np.allclose(cells, reference, rtol=0, atol=1e-5):
+        raise ValueError("DSF currently requires a fixed simulation cell; variable-cell trajectories are unsupported")
+    if supplied is not None and not np.allclose(supplied, reference, rtol=0, atol=1e-5):
+        raise ValueError("dsf_cell does not match the simulation cell in the trajectory")
+    return reference
+
+
+def _print_q_sampling(params, sampling, cell):
+    """Describe the actual selected vectors using the shared pySED console."""
+    print_section("Q-point sampling")
+    print_detail("Sampling mode", sampling["q_mode"])
+    used_total = len(sampling["q_cart"])
+    if sampling["q_mode"] != "spherical":
+        print_detail("Total Q vectors", used_total)
+        print_detail("Output Q rows", len(sampling["q_axis"]))
+        return
+    total = sampling["q_available_total"]
+    counts, population = sampling["q_counts"], sampling["q_available_counts"]
+    directions = sampling["q_direction_counts"]
+    legacy_cap = getattr(params, "dsf_max_points_per_shell", None)
+    cap = getattr(params, "dsf_max_points", 5000) if legacy_cap is None else legacy_cap
+    limit_label = "user limit" if legacy_cap is None else "per-shell limit"
+    limit = f"{limit_label}: {cap}" if cap else "all allowed vectors"
+    print_detail("Total Q vectors", f"{used_total} ({limit})")
+    print_detail("Allowed Q vectors", total)
+    width = getattr(params, "dsf_q_bin_width", 0.1)
+    low, high = getattr(params, "dsf_q_min", 0.0), params.dsf_q_max
+    # Use the decimal input values so an exact edge does not add a printed interval.
+    step = Fraction(str(width))
+    first = floor(Fraction(str(low)) / step)
+    stop = Fraction(str(high)) / step
+    formula = f"{high:g} / {width:g}"
+    if stop.denominator != 1:
+        formula = f"ceil({formula})"
+    if first:
+        formula += f" - floor({low:g} / {width:g})"
+    print_detail("Shell width (1/Å)", f"{width:g}")
+    end = ceil(stop)
+    total_shells = end - first
+    print_detail("Q shell intervals", f"{total_shells} ({formula})")
+    # Report contiguous gaps in the allowed lattice, including gaps at either end.
+    empty_ranges = []
+    next_shell = first
+    for occupied in [*sampling["q_available_shell_ids"], None]:
+        shell = end if occupied is None else int(occupied)
+        if next_shell < shell:
+            left = max(low, float(next_shell * step))
+            right = min(high, float(shell * step))
+            bounds = [np.format_float_positional(v, trim="-") for v in (left, right)]
+            bracket = "]" if occupied is None else ")"
+            empty_ranges.append(f"[{bounds[0]}, {bounds[1]}{bracket}")
+        next_shell = shell + 1
+    # The smallest nonzero box Q is independent of the chosen shell widths.
+    lengths = np.linalg.norm(cell, axis=1)
+    axes = cell / lengths[:, None]
+    if np.allclose(axes @ axes.T, np.eye(3), atol=1e-10, rtol=0):
+        longest = lengths.max()
+        q_min_box = 2 * np.pi / longest
+        edge = "L" if np.allclose(lengths, longest, rtol=1e-8, atol=0) else "L_max"
+        print_detail("Minimum box Q (1/Å)", f"Q_min = 2π/{edge} ≈ {q_min_box:.4g} ({edge} = {longest:.5g} Å)")
+    if empty_ranges:
+        print_detail("Empty Q ranges (1/Å)", ", ".join(empty_ranges))
+    print_detail("Sampled Q shells", f"{len(counts)} of {total_shells}")
+    print()
+    print("        " + f"{'Q range (1/Å)':<26}{'Used':>12}{'Allowed':>12}")
+    decimals = max(2, *(len(np.format_float_positional(value, precision=10, trim="-").partition(".")[2])
+                        for value in (low, high, width)))
+    for interval, used, allowed in zip(sampling["q_shell_intervals"], counts, population):
+        bounds = [f"{value:.{decimals}f}" for value in interval]
+        print("        " + f"{bounds[0] + '-' + bounds[1]:<26}{used:>12d}{allowed:>12d}")
+    omitted = sampling["q_available_shells"] - len(counts)
+    if omitted:
+        print_detail("Unsampled shells", f"{omitted}; increase dsf_max_points to cover more shells")
+    poor = sampling["q_coverage_poor"]
+    if np.any(poor):
+        print_section("Q direction coverage", "⚠")
+        capped = counts < population
+        print_detail("Sampled subsets flagged", int(np.count_nonzero(poor & capped)))
+        print_detail("Full-grid shells flagged", int(np.count_nonzero(poor & ~capped)))
+        print_detail("Coverage check", "heuristic; assess shell width and box size/shape")
+        if getattr(params, "dsf_save_q_resolved", False) or getattr(params, "dsf_partials", False):
+            print_detail("Q diagnostics", str(getattr(params, "out_files_name", "mdtrace")) + ".dsf_blocks")
+        print("        " + f"{'Q (1/Å)':>16}  {'Used / allowed':>16}  {'Directions':>10}")
+        indices = np.flatnonzero(poor)
+        for index in indices[:8]:
+            print("        " + f"{sampling['q_axis'][index]:16.6f}  "
+                  f"{str(counts[index]) + ' / ' + str(population[index]):>16}  {directions[index]:10d}")
+        if len(indices) > 8:
+            print_detail("Additional flagged shells", len(indices) - 8)
+
 
 def compute_dsf(params):
-    """Compute neutron coherent DSF from the prepared trajectory.
+    """Compute classical density and optional number-current spectra.
 
-    Parameters
-    ----------
-    params : MDTraceParams
-        Parsed input parameters.  Required fields:
-        - trajectory_path   : path to the prepared NetCDF trajectory
-        - out_files_name    : output prefix
-        - dsf_qpoints       : Q-points in fractional coords (flat list)
-        - atom_types        : list of atom type labels
-        - num_blocks        : number of blocks for averaging and SEM
-        - time_step         : MD time step (fs)
-        - output_data_stride: data output stride
-        - prim_unitcell     : 3×3 primitive cell (Angstrom)
-
-    Returns
-    -------
-    dict with keys:
-        q_cart      : Q-points in Cartesian (1/Angstrom)
-        freq_thz    : frequency grid (THz)
-        sqw         : S(Q,ω) mean
-        sqw_sem     : S(Q,ω) standard error
-        q_frac      : input Q-points in fractional coords
+    Atom IDs align positions, types, and velocities to the first-frame order.
+    Without IDs the atom order must already be fixed. All Q points must belong
+    to the reciprocal lattice of a fixed periodic simulation cell.
     """
-    with NetCDFReader(params.trajectory_path) as trajectory:
-        trajectory.require("positions")
-        n_frames = trajectory.info.n_frames
-        n_atoms = trajectory.info.n_atoms
-    print(f"  Trajectory: {n_frames} frames × {n_atoms} atoms")
+    from mdtrace.parameters import dsf_params, get_density_weighting, validate_dsf
 
-    # ── resolve atom types ──
-    atom_types = params.atom_types
-    if atom_types is None:
-        raise ValueError(
-            "atom_types not set in input.in.\n"
-            "Add:  atom_types = Si  (or Mo S S, etc.)"
-        )
+    validate_dsf(params, compute=True)
+    weighting = get_density_weighting(params)
+    option = lambda name: getattr(params, name, dsf_params[name].default)
+    trajectory_path = Path(params.trajectory_path)
+    if not is_netcdf(trajectory_path):
+        raise ValueError("DSF requires a NetCDF trajectory/cache; set trajectory_read_mode = cache")
+    num_blocks = int(params.num_blocks)
+    if num_blocks < 1 or num_blocks != params.num_blocks:
+        raise ValueError("num_blocks must be a positive integer")
+    time_step = float(params.time_step)
+    stride = float(params.output_data_stride)
+    if not np.isfinite(time_step) or time_step <= 0:
+        raise ValueError("time_step must be finite and positive")
+    if not np.isfinite(stride) or stride < 1 or not stride.is_integer():
+        raise ValueError("output_data_stride must be a positive integer")
+    dt_ps = time_step * stride / 1000.0
+    if not np.isfinite(dt_ps) or dt_ps <= 0:
+        raise ValueError("time_step * output_data_stride must be finite and positive")
 
-    # Expand per-type → per-atom if needed
-    if len(atom_types) < n_atoms:
-        # atom_types gives the list of UNIQUE types
-        # we need per-atom; assume types repeat in order
-        unique_types = list(dict.fromkeys(atom_types))
-        if n_atoms % len(unique_types) != 0:
-            raise ValueError(
-                f"atom_types length ({len(atom_types)}) does not divide "
-                f"num_atoms ({n_atoms}). Provide per-atom types or exact unique types."
+    blocks, q_blocks = {}, {}
+    keep_q = option("dsf_save_q_resolved") or option("dsf_partials")
+    species, pairs = np.empty(0, dtype=str), np.empty((0, 2), dtype=int)
+    use_gpu = getattr(params, "device", "cpu") == "gpu"
+    if use_gpu:
+        from mdtrace.dsf.gpu import GPUBackend
+        backend = GPUBackend()
+    else:
+        backend = DSFExecutor(getattr(params, "max_cores", 1))
+    with NetCDFReader(trajectory_path) as trajectory, backend as executor, calculation_progress(num_blocks) as progress:
+        require_current_cache(trajectory)
+        trajectory.require(POSITIONS)
+        if option("dsf_currents"):
+            if VELOCITIES not in trajectory.info.fields:
+                raise ValueError("dsf_currents = 1 requires velocities saved alongside positions")
+            trajectory.require(VELOCITIES)
+        n_frames, n_atoms = trajectory.info.n_frames, trajectory.info.n_atoms
+        if n_atoms == 0:
+            raise ValueError("DSF requires at least one atom")
+        if n_frames < num_blocks:
+            raise ValueError(f"trajectory has {n_frames} frames, fewer than num_blocks ({num_blocks})")
+        block_size = n_frames // num_blocks
+        frames_used = block_size * num_blocks
+        frames_cropped = n_frames - frames_used
+        if frames_cropped:
+            warnings.warn(f"cropping the final {frames_cropped} trajectory frame(s) to form equal DSF blocks",
+                          RuntimeWarning, stacklevel=2)
+        cell = _fixed_cell(trajectory, params, frames_used)
+        sampling = build_qpoints(params, cell)
+        if TIMES in trajectory.info.fields:
+            times = trajectory.read(TIMES, slice(0, frames_used))
+            if (times.shape != (frames_used,) or not np.isfinite(times).all()
+                    or not np.allclose(np.diff(times), dt_ps, rtol=1e-5, atol=1e-8)):
+                raise ValueError("trajectory times must be uniformly spaced and match time_step * output_data_stride")
+
+        atom_order = None
+        if ATOM_IDS in trajectory.info.fields:
+            atom_order = _atom_frame_order(
+                trajectory.read(ATOM_IDS, slice(0, frames_used)), n_atoms, frames_used,
             )
-        # For now, assume supercell = (na, nb, nc) × primitive with unique types
-        # We'll expand assuming each unique type has equal count
-        atoms_per_type = n_atoms // len(unique_types)
-        per_atom_types = []
-        for t in unique_types:
-            per_atom_types.extend([t] * atoms_per_type)
-        atom_types = per_atom_types
+        type_mapping, atom_counts = {}, {}
+        if weighting == "neutron" or option("atom_types") is not None or option("dsf_partials"):
+            if TYPES not in trajectory.info.fields:
+                raise ValueError("neutron weighting, partial spectra or atom_types mapping requires trajectory type IDs")
+            trajectory.require(TYPES)
+            raw_types = trajectory.read(TYPES, slice(0, frames_used))
+            if raw_types.ndim == 2:
+                if raw_types.shape != (frames_used, n_atoms):
+                    raise ValueError("trajectory atom type frames must match the positions")
+                if atom_order is not None:
+                    raw_types = np.take_along_axis(raw_types, atom_order, axis=1)
+            type_ids = _constant_type_ids(raw_types, n_atoms)
+            type_labels = option("atom_types")
+            if type_labels is None:
+                type_labels = [f"type_{value}" for value in np.unique(type_ids)]
+            labels, type_mapping = _map_atom_labels(type_ids, type_labels)
+            atom_counts = dict(Counter(labels.tolist()))
+            if option("dsf_partials"):
+                species, _, pairs = species_layout(labels)
+        if weighting == "neutron":
+            coherent_weights, incoherent_weights_sq = neutron_weights(labels)
+        else:
+            coherent_weights = np.ones(n_atoms, dtype=complex)
+            incoherent_weights_sq = np.zeros(n_atoms)
 
-    if len(atom_types) != n_atoms:
-        raise ValueError(
-            f"atom_types count ({len(atom_types)}) != num_atoms ({n_atoms}). "
-            "Provide one label per atom or unique type list."
-        )
+        print_section("DSF calculation setup")
+        print_detail("Trajectory", f"{n_frames} frames × {n_atoms} atoms")
+        print_detail("Frame interval", f"{dt_ps:g} ps")
+        print_detail("Time blocks", f"{num_blocks} × {block_size} frames")
+        print_detail("Block duration", f"{block_size * dt_ps:g} ps")
+        print_detail("Frequency spacing", f"{1.0 / (block_size * dt_ps):.6g} THz")
+        print_detail("Nyquist frequency", f"{0.5 / dt_ps:.6g} THz")
+        print()
+        print_detail("Density weighting", "equal (number density, weight 1 per atom)" if weighting == "equal" else
+                     "neutron (neutron scattering weights)")
+        if option("dsf_currents"):
+            print_detail("Current weighting", f"{option('current_weighting')} (particle current, weight 1 per atom)")
+        print_detail("Spectral normalization", "density (intensity per THz)" if option("dsf_normalization") == "density"
+                     else "legacy (arbitrary units)")
+        if type_mapping:
+            print_detail("Atom type mapping", type_mapping)
+            print_detail("Atom counts", atom_counts)
+        if option("dsf_currents"):
+            print_detail("Particle currents", "CL and CT (sum of two transverse polarizations)")
+            if np.any(np.linalg.norm(sampling["q_cart"], axis=1) == 0):
+                print_detail("Q = 0 currents", "undefined; saved as NaN")
+        if num_blocks == 1:
+            print_detail("SEM", "not estimated with one time block; saved as NaN")
+        _print_q_sampling(params, sampling, cell)
 
-    # ── neutron weights ──
-    weights = _get_neutron_weights(atom_types)
-    print(f"  Neutron weights: {dict(zip(*np.unique(atom_types, return_counts=True)))}")
+        def full_blocks():
+            for block_index in range(num_blocks):
+                start = block_index * block_size
+                frames = slice(start, start + block_size)
+                positions = trajectory.read(POSITIONS, frames)
+                # Canonical trajectory velocities are m/s. Use A/ps with positions
+                # in A and time in ps, so omega**2*S = Q**2*C_L has consistent units.
+                velocities = trajectory.read(VELOCITIES, frames) / 100.0 if option("dsf_currents") else None
+                if atom_order is not None:
+                    order = atom_order[frames, :, None]
+                    positions = np.take_along_axis(positions, order, axis=1)
+                    if velocities is not None:
+                        velocities = np.take_along_axis(velocities, order, axis=1)
+                n_q = len(sampling["q_cart"])
+                stage = frame_range(start + 1, start + block_size, n_frames)
 
-    # ── Q-points: fractional → Cartesian ──
-    dsf_q_raw = params.dsf_qpoints
-    if dsf_q_raw is None:
-        raise ValueError("dsf_qpoints not set in input.in")
+                def report_q(fraction):
+                    progress(block_index + min(fraction, .99), stage, round(fraction * n_q), n_q)
 
-    q_frac = np.array(dsf_q_raw).reshape(-1, 3)
-    n_q = q_frac.shape[0]
+                yield executor.compute(
+                    positions, sampling["q_cart"], coherent_weights, incoherent_weights_sq,
+                    dt_ps=dt_ps, velocities=velocities,
+                    normalization=option("dsf_normalization"),
+                    subtract_mean=option("dsf_subtract_mean"),
+                    species_labels=labels if option("dsf_partials") else None,
+                    compute_self=bool(option("dsf_output_components") or keep_q),
+                    progress=report_q,
+                )
 
-    # primitive cell for Cartesian conversion
-    if params.prim_unitcell is not None:
-        cell = params.prim_unitcell
-    else:
-        # fallback: identity
-        cell = np.eye(3)
+        compute_self = bool(option("dsf_output_components") or keep_q)
+        use_streaming = not compute_self and not option("dsf_partials") and not np.any(incoherent_weights_sq)
+        if use_streaming:
+            # Release the metadata reader before the prefetch thread opens its
+            # own handle. All remaining NetCDF operations belong to that reader.
+            trajectory.close()
+            stream = executor.stream_blocks if use_gpu else partial(stream_blocks, executor)
+            spectra_blocks = stream(
+                trajectory_path, block_size, num_blocks, n_atoms,
+                sampling["q_cart"], coherent_weights, currents=bool(option("dsf_currents")),
+                prefetch=bool(getattr(params, "trajectory_prefetch", True)), atom_order=atom_order,
+                progress=progress, batch_status=progress, trajectory_frames=n_frames,
+                dt_ps=dt_ps, normalization=option("dsf_normalization"),
+                subtract_mean=option("dsf_subtract_mean"),
+            )
+        else:
+            print_section("Trajectory reading")
+            print_detail("Read mode", "full time blocks (atom-wise spectra)")
+            print_detail("Prefetch", "not used for atom-wise spectra")
+            spectra_blocks = full_blocks()
+        with closing(spectra_blocks):
+            for completed, spectra in enumerate(spectra_blocks, start=1):
+                for name, values in spectra.items():
+                    blocks.setdefault(name, []).append(average_q_groups(values, sampling))
+                    if keep_q:
+                        q_blocks.setdefault(name, []).append(values)
+                progress(completed)
 
-    # fractional → Cartesian: Q_cart = 2π * (q_frac @ cell⁻¹) ?
-    # Actually: Q_cart = 2π * q_frac @ reciprocal_lattice
-    # reciprocal_lattice = 2π * inv(cell).T... no:
-    # b1 = 2π * (a2×a3) / (a1·(a2×a3))  but for SED convention we use:
-    # Q_cart (Angstrom⁻¹) = 2π * q_frac @ inv(cell).T
-    # Check: if cell = diag(a,a,a), then Q = (2π/a) * (h,k,l)
-    inv_cell = np.linalg.inv(cell)
-    q_cart = 2.0 * np.pi * (q_frac @ inv_cell.T)
-
-    print(f"  Q-points ({n_q}):")
-    for i, (qf, qc) in enumerate(zip(q_frac, q_cart)):
-        print(f"    [{i}] frac: {qf}  →  cart: [{qc[0]:.4f}, {qc[1]:.4f}, {qc[2]:.4f}] 1/Å")
-
-    # ── frequency grid ──
-    block_size = n_frames // params.num_blocks
-    if block_size < 2:
-        block_size = n_frames
-        num_blocks = 1
-    else:
-        num_blocks = params.num_blocks
-
-    dt_sec = params.time_step * params.output_data_stride / 1e15  # fs → s
-    freq_hz = np.fft.fftfreq(block_size, dt_sec)
-    # positive frequencies only (skip DC for plotting convenience)
-    pos_mask = freq_hz > 0
-    freq_thz = freq_hz[pos_mask] / 1e12
-
-    # ── block-averaged DSF ──
-    all_blocks = []
-    with NetCDFReader(params.trajectory_path) as trajectory:
-        for block_idx in range(num_blocks):
-            start = block_idx * block_size
-            end = start + block_size
-            if end > n_frames:
-                break
-            block = trajectory.read_positions(slice(start, end))
-
-            sqw_block = np.zeros((n_q, len(freq_thz)))
-            for iq, q_vec in enumerate(q_cart):
-                # ρ(Q, t) = Σ w_a exp(i Q·r_a(t))
-                phase = np.exp(1j * np.dot(block, q_vec))  # (T, N)
-                rho = np.sum(weights[None, :] * phase, axis=1)  # (T,)
-
-                # FFT with forward normalization (1/√N convention)
-                rho_fft = np.fft.fft(rho, norm="forward")  # (T,)
-                spectrum = np.abs(rho_fft[pos_mask]) ** 2
-
-                # normalize: divide by N * N_t
-                sqw_block[iq] = spectrum / (n_atoms * block_size)
-
-            all_blocks.append(sqw_block)
-
-    all_blocks = np.array(all_blocks)  # (num_blocks, n_q, n_freq)
-    sqw_mean = np.mean(all_blocks, axis=0)
-    sqw_sem = np.std(all_blocks, axis=0, ddof=1) / np.sqrt(all_blocks.shape[0]) \
-              if all_blocks.shape[0] > 1 else np.zeros_like(sqw_mean)
-
-    print(f"  DSF shape: {n_q} Q-points × {len(freq_thz)} frequencies")
-    print(f"  Blocks: {all_blocks.shape[0]}, SEM computed: {all_blocks.shape[0] > 1}")
-
-    return {
-        "q_cart": q_cart,
-        "q_frac": q_frac,
-        "freq_thz": freq_thz,
-        "sqw": sqw_mean,
-        "sqw_sem": sqw_sem,
+    result = dict(sampling)
+    for name, values in blocks.items():
+        result[name], result[name + "_sem"] = mean_and_sem(values)
+    for name, values in q_blocks.items():
+        result["qblocks__" + name] = np.stack(values)
+        result["qresolved__" + name], result["qresolved__" + name + "_sem"] = mean_and_sem(result["qblocks__" + name])
+    freq_thz = np.fft.fftshift(np.fft.fftfreq(block_size, d=dt_ps))
+    result.update(freq_thz=freq_thz, energy_mev=PLANCK_MEV_PS * freq_thz,
+                  num_blocks=num_blocks, block_size=block_size,
+                  frames_cropped=frames_cropped, type_mapping=type_mapping)
+    result["metadata"] = {
+        "format_version": 2, "configuration": calculation_configuration(params),
+        "source_signature": source_signature(params),
+        "trajectory": str(trajectory_path.resolve()), "n_atoms": n_atoms,
+        "frames_used": frames_used, "frames_cropped": frames_cropped,
+        "num_blocks": num_blocks, "block_size": block_size, "dt_ps": dt_ps,
+        "frequency_resolution_THz": 1.0 / (block_size * dt_ps),
+        "nyquist_THz": 0.5 / dt_ps, "cell_A": cell.tolist(),
+        "density_weighting": weighting,
+        "experiment": "number" if weighting == "equal" else "neutron",  # Existing text format.
+        "normalization": option("dsf_normalization"),
+        "subtract_mean": bool(option("dsf_subtract_mean")),
+        **spectrum_units(weighting, option("dsf_normalization")),
+        "currents": bool(option("dsf_currents")), "current_weighting": "equal",
+        "transverse_convention": "sum of two transverse polarizations",
+        "zero_Q_current": "undefined (NaN)",
+        "frequency_convention": "two-sided, ordinary frequency f in THz; no positive-frequency doubling",
+        "spectral_density_axis": "frequency_thz",
+        "energy_conversion": "spectra remain per THz; E=h*f; divide spectral densities by h=4.135667696 meV*ps for per-meV units",
+        "q_mode": sampling["q_mode"], "q_axis_label": sampling["q_axis_label"],
+        "q_path_labels": sampling["q_path_labels"],
+        "q_fractional_basis": "prim_unitcell" if sampling["q_frac"].size else None,
+        "q_rows": "q_group maps individual Q vectors to output rows; spherical rows average spectra",
+        "sem_convention": "standard error across non-overlapping time blocks after direction averaging",
+        "sem_estimated": num_blocks > 1,
+        "sem_limits": "one block: NaN; does not include angular sampling uncertainty or block autocorrelation",
+        "complex_sem": "RMS complex deviation across blocks; real/imaginary covariance is retained in qblocks",
+        "q_resolved": bool(keep_q), "partials": bool(option("dsf_partials")),
+        "spectrum_names": list(blocks),
+        "species_labels": species.tolist(), "pair_indices": pairs.tolist(),
+        "pair_convention": "raw A_a*conj(A_b)/N; AA once, AB contribution 2*Re(b_a*conj(b_b)*P_ab)",
+        "partial_axes": "Q, pair_or_species, frequency; qblocks add leading time_block axis",
+        "q_coverage_heuristic": "poor if fewer than 6 unoriented directions or second-moment eigenvalues outside [0.1,0.6]; not a convergence certificate",
+        "q_population_scope": "all reciprocal-box vectors in each original shell",
+        "q_available_total": sampling.get("q_available_total", len(sampling["q_cart"])),
+        "q_available_shells": sampling.get("q_available_shells", len(sampling["q_axis"])),
+        "q_budget_mode": sampling.get("q_budget_mode"),
+        "atom_type_mapping": {str(key): value for key, value in type_mapping.items()},
+        "atom_counts": atom_counts,
     }
-
-
-# ── output ──────────────────────────────────────────────────────
-
-def save_dsf(result, params):
-    """Save DSF result to text files."""
-    prefix = params.out_files_name
-
-    # S(Q,ω) matrix: rows = Q-points, columns = frequencies
-    np.savetxt(prefix + ".dsf", result["sqw"],
-               header=f"S(Q,w) — {result['sqw'].shape[0]} Q-points × "
-                      f"{result['sqw'].shape[1]} frequencies")
-
-    # frequency grid
-    np.savetxt(prefix + ".dsf_THz", result["freq_thz"],
-               header="Frequency (THz)")
-
-    # Q-points (Cartesian, 1/Angstrom)
-    np.savetxt(prefix + ".dsf_Qcart", result["q_cart"],
-               header="Q-points (Cartesian, 1/Angstrom)")
-
-    # Q-points (fractional)
-    np.savetxt(prefix + ".dsf_Qfrac", result["q_frac"],
-               header="Q-points (fractional)")
-
-    # SEM
-    np.savetxt(prefix + ".dsf_sem", result["sqw_sem"],
-               header="S(Q,w) standard error of the mean")
-
-    print(f"  Saved: {prefix}.dsf, .dsf_THz, .dsf_Qcart, .dsf_Qfrac, .dsf_sem")
+    return result

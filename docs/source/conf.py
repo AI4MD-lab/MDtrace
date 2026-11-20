@@ -29,7 +29,11 @@ version = '.'.join(release.split('.')[:2])
 extensions = ['sphinx.ext.mathjax']
 
 templates_path = ['_templates']
-exclude_patterns = []
+# Historical SED reference sources remain on disk, outside the current manual.
+exclude_patterns = [
+    'sed_workflow/**', 'input_parameters/**',
+    'theory.rst', 'sed_units.rst', 'peak_detection.rst',
+]
 
 source_suffix = {
     '.rst': 'restructuredtext',

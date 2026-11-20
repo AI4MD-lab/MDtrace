@@ -1,0 +1,41 @@
+# SPHERICAL: copy this complete file to input.in in your calculation directory.
+# Supply amorphous.xyz: a fixed, fully periodic GPUMD trajectory containing
+# positions and velocities. Run: mdtrace input.in
+# For isotropic amorphous materials/liquids; no primitive lattice is needed.
+method = dsf
+device = cpu  # Use gpu for a CUDA GPU.
+# Compute missing/changed results, then plot the saved text files.
+action = thinking
+density_weighting = equal  # Each atom has weight 1; neutron uses scattering weights.
+current_weighting = equal  # Particle current; currently the only supported choice.
+trajectory_file = amorphous.xyz
+trajectory_read_mode = cache
+out_files_name = amorphous_dsf
+# Actual MD timestep in fs and number of MD steps between saved frames.
+# These example values give a saved-frame interval of 10 fs = 0.01 ps.
+time_step = 1
+output_data_stride = 10
+# Four non-overlapping time blocks; more blocks reduce frequency resolution.
+num_blocks = 4
+
+dsf_q_mode = spherical
+# Q magnitudes and shell width in Å⁻¹ (Q includes 2*pi).
+# Check these example choices against the actual box and Q diagnostics.
+dsf_q_min = 0.1
+dsf_q_max = 3.0
+dsf_q_bin_width = 0.05
+# Total Q-vector budget across all shells, counting both members of +/- pairs.
+# 0 uses all vectors. Odd budgets round down to preserve complete pairs.
+# Radial-balanced sampling favors sparse low-Q regions.
+dsf_max_points = 5000
+# Reproducible subsampling when the cap is active.
+dsf_seed = 0
+# Spherical sampling excludes Q=0.
+# Density + longitudinal (CL) + transverse (CT) currents; requires velocities.
+# CT sums both transverse polarizations, rather than averaging them.
+dsf_currents = 1
+# Remove the time mean in each block for vibration spectra.
+# Use 0 if the elastic/quasielastic contribution is needed.
+dsf_subtract_mean = 1
+# Plot limit in THz only; saved spectra keep the full frequency range.
+dsf_plot_frequency_max = 20

@@ -71,7 +71,7 @@ def _read_entries(input_file):
 def _select_method(entries):
     """Read the method before choosing its parameter table.
 
-    Defaults to ``"sed"`` when no ``method = ...`` line is present,
+    Defaults to ``"dsf"`` when no ``method = ...`` line is present,
     matching the ``method`` parameter default in ``common_params``.
     """
 
@@ -80,6 +80,8 @@ def _select_method(entries):
         if key == "method":
             method = values[0].strip("'\"").lower()
 
+    if method == "sed":
+        raise ValueError("SED has been removed from MDtrace; use pySED (pysed) for SED calculation, plotting, and fitting")
     if method not in methods:
         supported = ", ".join(methods)
         raise ValueError(
@@ -93,6 +95,14 @@ def read_input(input_file="input.in"):
 
     input_path = Path(input_file).expanduser().resolve()
     entries = _read_entries(input_path)
+    keys = {key for _, key, _ in entries}
+    if {"density_weighting", "experiment"} <= keys:
+        raise ValueError(f"{input_path}: specify density_weighting or legacy experiment, not both")
+    if {"dsf_max_points", "dsf_max_points_per_shell"} <= keys:
+        raise ValueError(
+            f"{input_path}: specify dsf_max_points or the legacy "
+            "dsf_max_points_per_shell, not both"
+        )
     method = _select_method(entries)
     method_config = methods[method]
     repeated_names = set(common_params) & set(method_config["parameters"])
@@ -113,7 +123,9 @@ def read_input(input_file="input.in"):
     params = SimpleNamespace(input_file=str(input_path), **defaults)
 
     for line_number, key, values in entries:
-        parameter = parameter_table.get(key)
+        legacy_weighting = method == "dsf" and key == "experiment"
+        name = "density_weighting" if legacy_weighting else key
+        parameter = parameter_table.get(name)
         if parameter is None:
             raise ValueError(
                 f"{input_path}:{line_number}: parameter '{key}' is not "
@@ -122,13 +134,17 @@ def read_input(input_file="input.in"):
 
         try:
             value = parameter.read(values)
+            if legacy_weighting:
+                if value not in {"number", "neutron"}:
+                    raise ValueError("legacy experiment must be number or neutron")
+                value = "equal" if value == "number" else "neutron"
         except (TypeError, ValueError) as error:
             raise ValueError(
                 f"{input_path}:{line_number}: invalid '{key}': {error}"
             ) from error
-        setattr(params, key, value)
+        setattr(params, name, value)
 
-    for key in ("trajectory_file", "basis_lattice_file"):
+    for key in ("trajectory_file",):
         if not hasattr(params, key):
             continue
         path = Path(getattr(params, key)).expanduser()
